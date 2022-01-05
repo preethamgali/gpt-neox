@@ -24,5 +24,5 @@ def print_rank_0(*message):
 
 
 from .initialize import initialize_megatron
-from .neox_arguments import NeoXArgs
+from .neox_arguments import NeoXArgs, NeoXArgsDistillation
 
