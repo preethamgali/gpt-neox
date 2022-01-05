@@ -33,4 +33,4 @@ NeoX args can be instantiated with the following options
 """
 
 
-from .arguments import NeoXArgs, NeoXArgsDistillation
+from .arguments import NeoXArgs
