@@ -1032,6 +1032,10 @@ class NeoXArgs(*BASE_CLASSES):
 class NeoXArgsDistillation(NeoXArgsDistil):
 
     @classmethod
+    def consume_deepy_args(cls):
+        return super().consume_deepy_args()
+
+    @classmethod
     def consume_neox_args(cls, overwrite_values=None):
         """
         Deepspeed launcher needs to pass the arguments for `pretrain_gpt2.py` across to all machines.
