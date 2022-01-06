@@ -1031,31 +1031,64 @@ class NeoXArgs(*BASE_CLASSES):
 @dataclass
 class NeoXArgsDistillation(NeoXArgs, NeoXArgsDistil):
 
-    @classmethod
-    def consume_neox_args(cls, overwrite_values=None):
+    def __post_init__(self):
         """
-        Deepspeed launcher needs to pass the arguments for `pretrain_gpt2.py` across to all machines.
-
-        In order not to have any problems with different configs being mismatched across machines, we instead read the .yaml configuration file from the main rank,
-        then serialize the arguments to a dictionary, which the deepspeed launcher broadcasts to all machines (`--megatron_config`).
-
-        We then instantiate a new NeoXArgs from the dictionary (`.from_dict`). This should ensure args are never inconsistent across machines.
+        after initialization of default or loaded values
+        a number of functions are performed in order to
+        calculate values, assert consistency and do typechecking.
         """
+        if not NeoXArgs.validate_keys():
+            raise ValueError(
+                self.__class__.__name__
+                + ".__post_init__() NeoXArgs keys cannot be validated"
+            )
+        self.is_student_set = None
+        self.is_teacher_set = None
 
-        parser = argparse.ArgumentParser(
-            description="Distil-GPT-NeoX Configuration", allow_abbrev=False
-        )
-        parser.add_argument(
-            "--megatron_config",
-            type=str,
-            default=None,
-            help="json dict dumped as string in NeoXArgs.get_deepspeed_main_args()",
-        )
+        self.set_student_and_teacher_config()
 
-        args_parsed, _ = parser.parse_known_args()
-        megatron_config = json.loads(args_parsed.megatron_config)
-        from pprint import pprint
-        pprint(megatron_config)
-        if overwrite_values is not None:
-            megatron_config.update(overwrite_values)
-        return cls.from_dict(args_dict=megatron_config)
+        self.set_teacher()
+        if not self.validate_types():
+            raise ValueError(
+                self.__class__.__name__
+                + ".__post_init__() NeoXArgs types cannot be validated"
+            )
+
+        if not self.validate_values():
+            raise ValueError(
+                self.__class__.__name__
+                + ".__post_init__() NeoXArgs values cannot be validated"
+            )
+
+        self.set_student()
+        self.enable_logging()
+        self.calculate_derived()
+        if not self.validate_types():
+            raise ValueError(
+                self.__class__.__name__
+                + ".__post_init__() NeoXArgs types cannot be validated"
+            )
+
+        if not self.validate_values():
+            raise ValueError(
+                self.__class__.__name__
+                + ".__post_init__() NeoXArgs values cannot be validated"
+            )
+
+    def set_student_and_teacher_config(self):
+        self.student_model_args = {key.replace("-","_"):value for key, value in self.student_model_args.items()}
+        self.teacher_model_args = {key.replace("-","_"):value for key, value in self.teacher_model_args.items()}
+
+    def set_student(self):
+        for key, value in self.student_model_args.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        self.is_student_set = True
+        self.is_teacher_set = False
+
+    def set_teacher(self):
+        for key, value in self.teacher_model_args.items():
+            if hasattr(self, key):
+                setattr(self, key, value)
+        self.is_student_set = False
+        self.is_teacher_set = True
