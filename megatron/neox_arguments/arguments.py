@@ -1040,29 +1040,12 @@ class NeoXArgsDistillation(NeoXArgs, NeoXArgsDistil):
         if not NeoXArgs.validate_keys():
             raise ValueError(
                 self.__class__.__name__
-                + ".__post_init__() NeoXArgs keys cannot be validated"
-            )
-        self.is_student_set = None
-        self.is_teacher_set = None
-
-        self.set_student_and_teacher_config()
-
-        self.set_teacher()
-        self.calculate_derived()
-        if not self.validate_values():
-            raise ValueError(
-                self.__class__.__name__
-                + ".__post_init__() NeoXArgs values cannot be validated"
+                + ".__post_init__() NeoXArgsDistillation keys cannot be validated"
             )
             
-        self.set_student()
-        self.enable_logging()
-        self.calculate_derived()
-        if not self.validate_values():
-            raise ValueError(
-                self.__class__.__name__
-                + ".__post_init__() NeoXArgs values cannot be validated"
-            )
+        self.has_student_config = None
+        self.has_teacher_config = None
+        self.set_student_and_teacher_config()
 
     def get_parent_class_value_dict(
         self, *parent_classes, only_non_defaults=False
@@ -1090,19 +1073,31 @@ class NeoXArgsDistillation(NeoXArgs, NeoXArgsDistil):
         return self.get_parent_class_value_dict(*BASE_CLASSES_WITH_DISTIL)
 
     def set_student_and_teacher_config(self):
-        self.student_model_args = {key.replace("-","_"):value for key, value in self.student_model_args.items()}
-        self.teacher_model_args = {key.replace("-","_"):value for key, value in self.teacher_model_args.items()}
+        def set_and_update_model_config_dict(model_args, is_student):
+            model_args = {key.replace("-","_"):value for key, value in model_args.items()}
+            if is_student:
+                self.set_student()
+            else:
+                self.set_teacher()
+            self.calculate_derived()
+            if not self.validate_values():
+                raise ValueError(
+                    self.__class__.__name__
+                    + ".__post_init__() NeoXArgsDistillation values cannot be validated"
+                )
+            return self.get_parent_class_value_dict(NeoXArgsModel)
+
+        default_model_args = self.get_parent_class_value_dict(NeoXArgsModel)
+        self.teacher_model_args = set_and_update_model_config_dict(self.teacher_model_args, is_student=False) 
+        self.update_values(default_model_args)
+        self.student_model_args = set_and_update_model_config_dict(self.student_model_args, is_student=True)
 
     def set_student(self):
-        for key, value in self.student_model_args.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-        self.is_student_set = True
-        self.is_teacher_set = False
+        self.update_values(self.student_model_args)
+        self.has_student_config = True
+        self.has_teacher_config = False
 
     def set_teacher(self):
-        for key, value in self.teacher_model_args.items():
-            if hasattr(self, key):
-                setattr(self, key, value)
-        self.is_student_set = False
-        self.is_teacher_set = True
+        self.update_values(self.teacher_model_args)
+        self.has_student_config = False
+        self.has_teacher_config = True
