@@ -1034,7 +1034,7 @@ class NeoXArgsDistillation(NeoXArgs, NeoXArgsDistil):
     def __post_init__(self):
         """
         after initialization of default or loaded values
-        a number of functions are performed in order to
+        a number of functions arget_parent_class_value_dicte performed in order to
         calculate values, assert consistency and do typechecking.
         """
         if not NeoXArgs.validate_keys():
@@ -1063,6 +1063,31 @@ class NeoXArgsDistillation(NeoXArgs, NeoXArgsDistil):
                 self.__class__.__name__
                 + ".__post_init__() NeoXArgs values cannot be validated"
             )
+
+    def get_parent_class_value_dict(
+        self, *parent_classes, only_non_defaults=False
+    ) -> dict:
+        """
+        takes a sequence of parent classes and returns corresponding values (with defaults set)
+        """
+        temp_parent_classes = []
+        for class_name in parent_classes:
+            if class_name == NeoXArgs:
+                temp_parent_classes += list(NeoXArgs.__bases__)
+            else:
+                temp_parent_classes += [class_name]
+
+        return super().get_parent_class_value_dict(
+        *temp_parent_classes, only_non_defaults=only_non_defaults
+    )
+
+    @property
+    def all_config(self) -> dict:
+        """
+        returns variables of all args
+        """
+        BASE_CLASSES_WITH_DISTIL = BASE_CLASSES + [NeoXArgsDistil]
+        return self.get_parent_class_value_dict(*BASE_CLASSES_WITH_DISTIL)
 
     def set_student_and_teacher_config(self):
         self.student_model_args = {key.replace("-","_"):value for key, value in self.student_model_args.items()}
