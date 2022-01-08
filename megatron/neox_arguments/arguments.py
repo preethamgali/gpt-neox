@@ -1048,27 +1048,16 @@ class NeoXArgsDistillation(NeoXArgs, NeoXArgsDistil):
         self.set_student_and_teacher_config()
 
         self.set_teacher()
-        if not self.validate_types():
-            raise ValueError(
-                self.__class__.__name__
-                + ".__post_init__() NeoXArgs types cannot be validated"
-            )
-
+        self.calculate_derived()
         if not self.validate_values():
             raise ValueError(
                 self.__class__.__name__
                 + ".__post_init__() NeoXArgs values cannot be validated"
             )
-
+            
         self.set_student()
         self.enable_logging()
         self.calculate_derived()
-        if not self.validate_types():
-            raise ValueError(
-                self.__class__.__name__
-                + ".__post_init__() NeoXArgs types cannot be validated"
-            )
-
         if not self.validate_values():
             raise ValueError(
                 self.__class__.__name__
