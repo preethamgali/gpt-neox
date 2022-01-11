@@ -990,6 +990,16 @@ class NeoXArgsDistil(NeoXArgsTemplate):
     Directory containing a model checkpoint.
     """
 
+    input_teacher_hidden_state: bool = False
+    """
+    Set if input includes teacher last layer hidden_state values
+    """
+
+    input_teacher_output: bool = False
+    """
+    Set if input includes teacher output values
+    """
+
     alpha_mse: float = 0.0
     """
     Weight for mse loss range 0-1.

@@ -37,6 +37,7 @@ from megatron.utils import (
 from megatron.model.gpt2_model import cross_entropy
 from eval_tasks import run_eval_harness
 
+from training import get_model
 
 def pretrain_by_distil(distil_neox_args):
 
@@ -53,32 +54,24 @@ def pretrain_by_distil(distil_neox_args):
 
     # Model, optimizer, and learning rate.
     timers("model and optimizer").start()
-    model, optimizer, lr_scheduler = setup_model_and_optimizer(
+    model, optimizer, lr_scheduler = setup_model_and_optimizer_to_distil(
         distil_neox_args=distil_neox_args
     )
     timers("model and optimizer").stop()
 
-def setup_model_and_optimizer(distil_neox_args, iteration=None):
+def setup_model_and_optimizer_to_distil(distil_neox_args, iteration=None):
 
     distil_neox_args.set_student()
-    student_model = GPT2ModelPipe(
-        neox_args=distil_neox_args,
-        num_tokentypes=0,
-        parallel_output=True,
-        topology=mpu.get_topology(),
-        inference=False,
-        get_key_value=False,
-    )
+    distil_neox_args.update_value("load", distil_neox_args.load_student)
+    student_model = get_model(neox_args=distil_neox_args, inference=False, get_key_value=False)
+    assert distil_neox_args.load is not None, "Please provide the teacher model load path for distillation"
+    _ = load_checkpoint(neox_args=distil_neox_args,model=student_model)
 
     distil_neox_args.set_teacher()
-    teacher_model = GPT2ModelPipe(
-        neox_args=distil_neox_args,
-        num_tokentypes=0,
-        parallel_output=True,
-        topology=mpu.get_topology(),
-        inference=False,
-        get_key_value=False,
-    )
+    distil_neox_args.update_value("load", distil_neox_args.load_teacher)
+    teacher_model = get_model(neox_args=distil_neox_args, inference=False, get_key_value=False)
+    if distil_neox_args.load is not None:
+        _ = load_checkpoint(neox_args=distil_neox_args,model=teacher_model)
 
     print_rank_0("student_model", student_model)
     print_rank_0("teacher_model", teacher_model)
