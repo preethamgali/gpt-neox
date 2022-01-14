@@ -141,7 +141,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
         elif any([isinstance(layers, nn.ModuleList), isinstance(layers, nn.Sequential)]):
             self.specs[idx:idx] = layers
         elif isinstance(layers, list):
-            assert all([hasattr(l, '__call__') for l in layers]), "all items in `layers` must be Callables"
+            assert all([hasattr(l, '__call__') or isinstance(l, LayerSpec) for l in layers]), "all items in `layers` must be Callables"
             self.specs[idx:idx] = layers
         else:
             raise ValueError(f'layer passed into {self.__class__.__name__}.insert_layer() should be either an nn.Module, an nn.ModuleList, an nn.Sequential object, or a list of callables not a {type(layers)}')
