@@ -760,3 +760,54 @@ def parallel_lm_logits(input_, word_embeddings_weight, parallel_output, bias=Non
         return logits_parallel
 
     return mpu.gather_from_model_parallel_region(logits_parallel)
+
+
+from megatron.model.transformer import ParallelTransformerLayerPipe, NormPipe, ParallelLinearPipe, parallel_lm_logits, ParallelLinear
+
+class DistilParallelTransformerLayerPipe(ParallelTransformerLayerPipe):
+    
+    def forward(self, input_args, teacher_args, student_args):
+
+        input_ids, position_ids, attention_mask = input_args
+        is_student = input_ids is None
+        hidden_states, outputs = student_args if is_student else teacher_args
+        hidden_states = super().forward(hidden_states, attention_mask)
+
+        if is_student:
+            student_args = hidden_states, outputs
+        else:
+            teacher_args = hidden_states, outputs
+
+        return input_args, teacher_args, student_args
+
+
+class DistilNormPipe(NormPipe):
+
+    def forward(self, input_args, teacher_args, student_args):
+
+        input_ids, position_ids, attention_mask = input_args
+        is_student = input_ids is None
+        hidden_states, outputs = student_args if is_student else teacher_args
+        hidden_states = super().forward(hidden_states, attention_mask)
+
+        if is_student:
+            student_args = hidden_states, outputs
+        else:
+            teacher_args = hidden_states, outputs
+
+        return input_args, teacher_args, student_args
+
+class DistilParallelLinearPipe(ParallelLinearPipe):
+
+    def forward(self, input_args, teacher_args, student_args):
+        input_ids, position_ids, attention_mask = input_args
+        is_student = input_ids is None
+        hidden_states, outputs = student_args if is_student else teacher_args
+        outputs = super().forward(hidden_states, attention_mask)
+
+        if is_student:
+            student_args = hidden_states, outputs
+        else:
+            teacher_args = hidden_states, outputs
+
+        return input_args, teacher_args, student_args

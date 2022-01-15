@@ -126,9 +126,11 @@ def setup_model_and_optimizer_to_distil(distil_neox_args):
         distil_model.load_state_dict(new_distil_model_state_dict)
         return distil_model
 
+    torch.distributed.barrier()
     teacher_model = load_model(distil_neox_args, is_teacher=True)
     student_model = load_model(distil_neox_args, is_teacher=False)
     distil_model = get_distil_model(distil_neox_args, teacher_model, student_model)
+    torch.distributed.barrier()
 
     return None, None, None
 
