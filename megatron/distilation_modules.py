@@ -1,6 +1,6 @@
-from megatron.model.word_embeddings import EmbeddingPipe, SoftEmbedding
-from megatron.model.transformer import ParallelLinearPipe, NormPipe, ParallelTransformerLayerPipe
-from megatron.model.gmlp import GMLPBlock
+# from megatron.model.word_embeddings import EmbeddingPipe, SoftEmbedding
+# from megatron.model.transformer import ParallelLinearPipe, NormPipe, ParallelTransformerLayerPipe
+# from megatron.model.gmlp import GMLPBlock
 
 class DistilDecorator:
 
@@ -14,14 +14,14 @@ class DistilDecorator:
                     if is_class_function:
                         self, prev_output, input_args, teacher_args, student_args = args
                         cur_output = class_func(self, prev_output)
-
-                        if self.__class__ in [EmbeddingPipe, SoftEmbedding]:
+                        class_name = self.__class__.__name__ 
+                        if class_name in ['EmbeddingPipe', 'SoftEmbedding']:
                             if input_args[0] is None: # inside students
                                 input_args = prev_output
                             else:
                                 input_args = (None, None, None)
 
-                        if self.__class__ in [ParallelLinearPipe]: 
+                        if class_name in ['ParallelLinearPipe']: 
                             hidden_state = prev_output
                             output = cur_output
                             if input_args[0] is None: # inside teacher
