@@ -19,8 +19,8 @@
   "merge-file": "data/gpt2-merges.txt",
 
   "save": "checkpoints",
-  "load": "checkpoints",
-  "load_teacher": "/mnt/ssd-1/neox_checkpoints/dense_small_checkpoints/global_step485000",
+  #"load": "checkpoints",
+  "load_teacher": "checkpoints/global_step1",
   "checkpoint_validation_with_forward_pass": False,
   
   "tensorboard-dir": "tensorboard",
