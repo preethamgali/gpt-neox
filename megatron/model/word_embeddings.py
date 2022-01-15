@@ -6,6 +6,8 @@ from megatron import mpu
 from megatron.model.positional_embeddings import SinusoidalPositionalEmbedding
 from megatron.model.init_functions import get_init_methods
 
+from megatron.distilation_modules import DistilDecorator
+
 class Embedding(torch.nn.Module):
     """Language model embeddings.
     Arguments:
@@ -125,6 +127,7 @@ class EmbeddingPipe(Embedding):
         """Easy accessory for the pipeline engine to tie embeddings across stages."""
         return self.word_embeddings.weight
 
+    @DistilDecorator.distil_func(is_class_function=True)
     def forward(self, args):
         in_inference = len(args) == 4  # if the length of the args is 4, we're in inference :|
         in_train = len(args) == 3
@@ -171,6 +174,7 @@ class SoftEmbedding(torch.nn.Module):
             return embeds
         return torch.Tensor(n_tokens, neox_args.hidden_size).uniform_(-self.random_range, self.random_range)
             
+    @DistilDecorator.distil_func(is_class_function=True)
     def forward(self, args: tuple):
         in_inference = len(args) == 3  # embeddings, layer_past, attention_mask
         in_train = len(args) == 2 # embeddings, attention_mask

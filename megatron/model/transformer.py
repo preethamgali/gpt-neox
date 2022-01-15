@@ -41,6 +41,8 @@ from megatron.model.fused_bias_dropout import (
 )
 from megatron.model.utils import configure_sparse_attention
 
+from megatron.distilation_modules import DistilDecorator
+
 # flags required to enable jit fusion kernels
 torch._C._jit_set_profiling_mode(False)
 torch._C._jit_set_profiling_executor(False)
@@ -670,6 +672,7 @@ class ParallelTransformerLayer(nn.Module):
 class ParallelTransformerLayerPipe(ParallelTransformerLayer):
     """Extends ParallelTransformerLayer to forward attention_mask through the pipeline. """
 
+    @DistilDecorator.distil_func(is_class_function=True)
     def forward(self, args):
         in_inference = len(args) == 4  # length of the args in inference == 4
         in_train = len(args) == 2  # length of the args in training == 2
@@ -704,6 +707,7 @@ class ParallelTransformerLayerPipe(ParallelTransformerLayer):
 class ParallelLinearPipe(ParallelLinear):
     """Another helper class to pass presents through to the output when doing inference with a Pipe Parallel model"""
 
+    @DistilDecorator.distil_func(is_class_function=True)
     def forward(self, args):
         if not isinstance(args, tuple):
             # in training, args = hidden_state (tensor, so we check if object isn't a tuple and pass through here)
@@ -728,6 +732,7 @@ class NormPipe(nn.Module):
         super().__init__()
         self.norm = norm_class(hidden_size, eps=eps)
 
+    @DistilDecorator.distil_func(is_class_function=True)
     def forward(self, args):
         if not isinstance(args, tuple):
             # in training, args = hidden_state (tensor, so we check if object isn't a tuple and pass through here)
@@ -743,7 +748,7 @@ class NormPipe(nn.Module):
                 f"Incorrect number of arguments for {self.__class__.__name__}"
             )
 
-
+@DistilDecorator.distil_func(is_class_function=False)
 def parallel_lm_logits(input_, word_embeddings_weight, parallel_output, bias=None):
     """LM logits using word embedding weights."""
     # Parallel logits.
@@ -760,54 +765,3 @@ def parallel_lm_logits(input_, word_embeddings_weight, parallel_output, bias=Non
         return logits_parallel
 
     return mpu.gather_from_model_parallel_region(logits_parallel)
-
-
-from megatron.model.transformer import ParallelTransformerLayerPipe, NormPipe, ParallelLinearPipe, parallel_lm_logits, ParallelLinear
-
-class DistilParallelTransformerLayerPipe(ParallelTransformerLayerPipe):
-    
-    def forward(self, input_args, teacher_args, student_args):
-
-        input_ids, position_ids, attention_mask = input_args
-        is_student = input_ids is None
-        hidden_states, outputs = student_args if is_student else teacher_args
-        hidden_states = super().forward(hidden_states, attention_mask)
-
-        if is_student:
-            student_args = hidden_states, outputs
-        else:
-            teacher_args = hidden_states, outputs
-
-        return input_args, teacher_args, student_args
-
-
-class DistilNormPipe(NormPipe):
-
-    def forward(self, input_args, teacher_args, student_args):
-
-        input_ids, position_ids, attention_mask = input_args
-        is_student = input_ids is None
-        hidden_states, outputs = student_args if is_student else teacher_args
-        hidden_states = super().forward(hidden_states, attention_mask)
-
-        if is_student:
-            student_args = hidden_states, outputs
-        else:
-            teacher_args = hidden_states, outputs
-
-        return input_args, teacher_args, student_args
-
-class DistilParallelLinearPipe(ParallelLinearPipe):
-
-    def forward(self, input_args, teacher_args, student_args):
-        input_ids, position_ids, attention_mask = input_args
-        is_student = input_ids is None
-        hidden_states, outputs = student_args if is_student else teacher_args
-        outputs = super().forward(hidden_states, attention_mask)
-
-        if is_student:
-            student_args = hidden_states, outputs
-        else:
-            teacher_args = hidden_states, outputs
-
-        return input_args, teacher_args, student_args

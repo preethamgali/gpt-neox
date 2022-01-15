@@ -7,6 +7,7 @@ from megatron.model.activations import get_activation
 from megatron.model.norms import get_norm
 from megatron import mpu
 
+from megatron.distilation_modules import DistilDecorator
 
 class TinyAttention(nn.Module):
     def __init__(self, neox_args, d_attn, d_ff, mask_fn):
@@ -96,6 +97,7 @@ class GMLPBlock(nn.Module):
             init_method=output_layer_init_method,
             skip_bias_add=True)
 
+    @DistilDecorator.distil_func(is_class_function=True)
     def forward(self, args):
         in_inference = len(args) == 4
         in_train = len(args) == 2

@@ -32,6 +32,7 @@ from megatron.mpu import ParallelRelativePositionBias
 from megatron.model.transformer import ParallelTransformerLayerPipe, NormPipe, ParallelLinearPipe, parallel_lm_logits, ParallelLinear
 from megatron.model.gmlp import GMLPBlock
 from megatron.model.word_embeddings import EmbeddingPipe, SoftEmbedding
+from megatron.distilation_modules import DistilDecorator
 
 # Pipeline parallelism
 from deepspeed.pipe import PipelineModule, LayerSpec, TiedLayerSpec
@@ -62,7 +63,7 @@ def cross_entropy(output, labels, _fp16=False):
     loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
     return loss
 
-
+@DistilDecorator.distil_func(is_class_function=False)
 def _pre_transformer_block(args):
     # used instead of a lambda layer to pass outputs of the word embedding to the transformer block
     # using a custom function means we don't have to have this _inference mode which makes everything tricky
@@ -79,7 +80,7 @@ def _pre_transformer_block(args):
         raise ValueError('Incorrect number of args in `_pre_transformer_block`')
     return fn(args)
 
-
+@DistilDecorator.distil_func(is_class_function=False)
 def _post_transformer_block(args):
     # used instead of a lambda layer to pass outputs of the transformer block to the final layer
     # using a custom function means we don't have to have this _inference mode which makes everything tricky
@@ -238,6 +239,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
         #           Train: hidden_states
         #           Inference: (hidden_states, presents)
 
+        @DistilDecorator.distil_func(is_class_function=False)
         def _logits_helper(embedding, lm_output):
             """Just a wrapper to massage inputs/outputs from pipeline. """
             if self._inference and len(lm_output) == 2:
