@@ -83,60 +83,71 @@ def get_distil_model(distil_neox_args):
 
     def load_distil_model(distil_neox_args, teacher_model, student_model):
 
+        # if teacher output logits are provided as input we dont need teacher model
         if distil_neox_args.input_teacher_output:
-            return student_model, student_model._parameters.values()
+            return student_model, list(student_model.named_parameters())
+
+        # if teacher hiddent_state are provided as input we only need last layer of teacher model
+        if distil_neox_args.input_teacher_hidden_state:
+            teacher_model_specs = teacher_model.specs[-1:]
+        else:
+            teacher_model_specs = teacher_model.specs
 
         distil_model = load_model(distil_neox_args, is_teacher=False)
-
-        teacher_model_specs = teacher_model.specs
-
-        if distil_neox_args.input_teacher_hidden_state:
-            teacher_model_specs = teacher_model_specs[-1:]
-
         distil_model.insert_layers(teacher_model_specs, 0)
 
-        if distil_neox_args.load is not None:
+        distil_model_layers = list(distil_model.state_dict().items())
+        student_model_layers = list(student_model.state_dict().items())
+        teacher_model_layers = list(teacher_model.state_dict().items())
+
+        if distil_neox_args.input_teacher_hidden_state:
+            n_teacher_model_layers = len(distil_model_layers)-len(student_model_layers)
+            teacher_model_layers = teacher_model_layers[-n_teacher_model_layers:]
+
+        if distil_neox_args.load is None:
+
+            teacher_student_model_layers = teacher_model_layers + student_model_layers
+
+            assert len(distil_model_layers) == len(teacher_model_layers)+len(student_model_layers), \
+                f"Number of distil model layers: {len(distil_model_layers)} is not equal to" \
+                f"number of teacher and student model layers combined:" \
+                f"{len(teacher_model_layers)}+{len(student_model_layers)}={len(teacher_student_model_layers)}"
+
+            from collections import OrderedDict
+            new_distil_model_state_dict = OrderedDict()
+            for layer_num, (distil_model_layer, teacher_student_model_layer) in \
+                    enumerate(zip(distil_model_layers, teacher_student_model_layers)):
+
+                distil_model_key, _ = distil_model_layer
+                other_model_key, other_model_value = teacher_student_model_layer
+
+                distil_layer_name = ".".join(distil_model_key.split(".")[1:])
+                other_layer_name = ".".join(distil_model_key.split(".")[1:])
+
+                assert other_layer_name == distil_layer_name, \
+                    "distil layer: {distil_layer_name} is not same as combined teacher and student layer: {other_layer_name}"
+
+                new_distil_model_state_dict[distil_model_key] = other_model_value
+            distil_model.load_state_dict(new_distil_model_state_dict)
+
+        elif distil_neox_args.load is not None:
             print_rank_0(
                 f"Loading distil model weights from {distil_neox_args.load}")
             distil_model.load_state_dir(distil_neox_args.load)
-            return distil_model
 
-        distil_model_layers = list(distil_model.state_dict().items())
-        teacher_model_layers = list(teacher_model.state_dict().items())
-        if distil_neox_args.input_teacher_hidden_state:
-            teacher_model_layers = teacher_model_layers[-1:]
-        studnet_model_layers = list(student_model.state_dict().items())
+        n_distil_params = len(list(distil_model.named_parameters()))
+        n_student_params = len(list(student_model.named_parameters()))
+        n_teacher_params = n_distil_params - n_student_params
 
-        teacher_student_model_layers = teacher_model_layers + studnet_model_layers
+        required_named_parameters = []
+        for idx, param in enumerate(list(distil_model.named_parameters())):
+            name, parameter = param
+            if idx < n_teacher_params:
+                parameter.requires_grad=False
+            else:
+                required_named_parameters.append(param)
 
-        assert len(distil_model_layers) == len(teacher_model_layers)+len(studnet_model_layers), \
-            f"Number of distil model layers: {len(distil_model_layers)} is not equal to" \
-            f"number of teacher and student model layers combined:" \
-            f"{len(teacher_model_layers)}+{len(studnet_model_layers)}={len(teacher_student_model_layers)}"
-
-        trainable_params = []
-
-        from collections import OrderedDict
-        new_distil_model_state_dict = OrderedDict()
-        for layer_num, distil_model_layer, teacher_student_model_layer in \
-                enumerate(zip(distil_model_layers, teacher_student_model_layers)):
-
-            if layer_num >= len(teacher_model_layers):
-                trainable_params += distil_model_layer._parameters.values()
-
-            distil_model_key, _ = distil_model_layer
-            other_model_key, other_model_value = teacher_student_model_layer
-
-            distil_layer_name = ".".join(distil_model_key.split(".")[1:])
-            other_layer_name = ".".join(distil_model_key.split(".")[1:])
-
-            assert other_layer_name == distil_layer_name, \
-                "distil layer: {distil_layer_name} is not same as combined teacher and student layer: {other_layer_name}"
-
-            new_distil_model_state_dict[distil_model_key] = other_model_value
-
-        distil_model.load_state_dict(new_distil_model_state_dict)
-        return distil_model, trainable_params
+        return distil_model, required_named_parameters
 
     torch.distributed.barrier()
     teacher_model = load_model(distil_neox_args, is_teacher=True)
@@ -151,7 +162,8 @@ def get_distil_model(distil_neox_args):
 def get_distil_optimizer(model, trainable_params, distil_neox_args):
     optimizer, param_groups = get_optimizer(model, distil_neox_args)
     print_rank_0(optimizer)
-    return optimizer
+    return optimizer, param_groups
+
 
 def setup_model_and_optimizer_to_distil(distil_neox_args, inference=False, get_key_value=True, iteration=None):
 
@@ -163,21 +175,3 @@ def setup_model_and_optimizer_to_distil(distil_neox_args, inference=False, get_k
     # lr_scheduler = get_learning_rate_scheduler(
     #     optimizer=optimizer, neox_args=distil_neox_args)
     return None, None, None
-
-    # student_model = load_model(distil_neox_args, is_teacher=False)
-    # student_model, _, _, _ = deepspeed.initialize(
-    #         model=student_model,
-    #         args=distil_neox_args,
-    #         dist_init_required=False,
-    #         model_parameters=student_model.parameters(),
-    #         config_params=distil_neox_args.deepspeed_config,
-    #         mpu=mpu if not distil_neox_args.is_pipe_parallel else None,
-    # )
-
-    # save_checkpoint(
-    #     neox_args=distil_neox_args,
-    #     iteration=1,
-    #     model=student_model,
-    #     optimizer=None,
-    #     lr_scheduler=None,
-    # )
