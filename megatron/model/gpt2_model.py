@@ -239,7 +239,7 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
         #           Train: hidden_states
         #           Inference: (hidden_states, presents)
 
-        @DistilDecorator.distil_func(is_class_function=False)
+        @DistilDecorator.distil_func(is_class_function=True)
         def _logits_helper(embedding, lm_output):
             """Just a wrapper to massage inputs/outputs from pipeline. """
             if self._inference and len(lm_output) == 2:
