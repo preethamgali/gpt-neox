@@ -224,6 +224,103 @@ def forward_step(data_iterator, model, neox_args, timers, return_logits=False):
         return loss, outputs
     return loss
 
+def get_distil_model(distil_neox_args):
+    def load_model(distil_neox_args, is_teacher):
+        if is_teacher:
+            distil_neox_args.set_teacher()
+            load_path = distil_neox_args.load_teacher
+        else:
+            distil_neox_args.set_student()
+            load_path = distil_neox_args.load_student
+
+        model = get_model(neox_args=distil_neox_args,
+                          inference=False, get_key_value=False)
+        assert distil_neox_args.load is not None or not (is_teacher and load_path is None), \
+            "Please provide the teacher model load path for distillation"
+        if load_path is not None and distil_neox_args.load is None:
+            model_type = 'teacher' if is_teacher else 'studnet'
+            print_rank_0(
+                f"Loading {model_type} model weights from {load_path}")
+            model.load_state_dir(load_path)
+        return model
+
+    def load_distil_model(distil_neox_args, teacher_model, student_model):
+
+        # if teacher output logits are provided as input we dont need teacher model
+        if distil_neox_args.input_teacher_output:
+            return student_model, list(student_model.named_parameters())
+
+        # if teacher hiddent_state are provided as input we only need last layer of teacher model
+        if distil_neox_args.input_teacher_hidden_state:
+            teacher_model_specs = teacher_model.specs[-1:]
+        else:
+            teacher_model_specs = teacher_model.specs
+
+        distil_model = load_model(distil_neox_args, is_teacher=False)
+        distil_model.insert_layers(teacher_model_specs, 0)
+
+        distil_model_layers = list(distil_model.state_dict().items())
+        student_model_layers = list(student_model.state_dict().items())
+        teacher_model_layers = list(teacher_model.state_dict().items())
+
+        if distil_neox_args.input_teacher_hidden_state:
+            n_teacher_model_layers = len(distil_model_layers)-len(student_model_layers)
+            teacher_model_layers = teacher_model_layers[-n_teacher_model_layers:]
+
+        if distil_neox_args.load is None:
+
+            teacher_student_model_layers = teacher_model_layers + student_model_layers
+
+            assert len(distil_model_layers) == len(teacher_model_layers)+len(student_model_layers), \
+                f"Number of distil model layers: {len(distil_model_layers)} is not equal to" \
+                f"number of teacher and student model layers combined:" \
+                f"{len(teacher_model_layers)}+{len(student_model_layers)}={len(teacher_student_model_layers)}"
+
+            from collections import OrderedDict
+            new_distil_model_state_dict = OrderedDict()
+            for layer_num, (distil_model_layer, teacher_student_model_layer) in \
+                    enumerate(zip(distil_model_layers, teacher_student_model_layers)):
+
+                distil_model_key, _ = distil_model_layer
+                other_model_key, other_model_value = teacher_student_model_layer
+
+                distil_layer_name = ".".join(distil_model_key.split(".")[1:])
+                other_layer_name = ".".join(distil_model_key.split(".")[1:])
+
+                assert other_layer_name == distil_layer_name, \
+                    "distil layer: {distil_layer_name} is not same as combined teacher and student layer: {other_layer_name}"
+
+                new_distil_model_state_dict[distil_model_key] = other_model_value
+            distil_model.load_state_dict(new_distil_model_state_dict)
+
+        n_distil_params = len(list(distil_model.named_parameters()))
+        n_student_params = len(list(student_model.named_parameters()))
+        n_teacher_params = n_distil_params - n_student_params
+
+        for idx, param in enumerate(list(distil_model.named_parameters())):
+            name, parameter = param
+            if idx < n_teacher_params:
+                parameter.requires_grad=False
+
+        return distil_model
+
+    teacher_model = load_model(distil_neox_args, is_teacher=True)
+    student_model = load_model(distil_neox_args, is_teacher=False)
+    distil_model = load_distil_model(distil_neox_args, teacher_model, student_model)
+
+    if not distil_neox_args.is_pipe_parallel:
+        # Export PipeParallel model to nn.Sequential model to avoid the overhead of deepspeed's pipe parallel training
+        distil_model = distil_model.to_sequential()
+    else:
+        # This is a hack to give us a reference to get_batch_pipe from within training.py
+        # We need to call model.set_batch_fn after deepspeed.initialize
+        distil_model._megatron_batch_fn = partial(get_batch_pipe, neox_args=distil_neox_args)
+
+    if distil_neox_args.deepspeed:
+        # DeepSpeed handles CUDA, FP16, and DDP components.
+        return distil_model
+    else:
+        raise ValueError("Must be using deepspeed to run neox")
 
 def get_model(neox_args, inference=False, get_key_value=True):
     """Build the model."""
@@ -273,7 +370,6 @@ def get_model(neox_args, inference=False, get_key_value=True):
         return model
     else:
         raise ValueError("Must be using deepspeed to run neox")
-
 
 def get_optimizer(model, neox_args):
     """Set up the optimizer."""
@@ -404,9 +500,14 @@ def setup_model_and_optimizer(
     neox_args, inference=False, get_key_value=True, iteration=None
 ):
     """Setup model and optimizer."""
-    model = get_model(
-        neox_args=neox_args, inference=inference, get_key_value=get_key_value
-    )
+
+    if neox_args.do_distillation:
+        model = get_distil_model(distil_neox_args=neox_args)
+    else:
+        model = get_model(
+            neox_args=neox_args, inference=inference, get_key_value=get_key_value
+        )
+
     optimizer, param_groups = get_optimizer(model=model, neox_args=neox_args)
     lr_scheduler = get_learning_rate_scheduler(optimizer=optimizer, neox_args=neox_args)
 
@@ -485,7 +586,12 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
             neox_args=neox_args, timers=timers, model=model, data_iterator=data_iterator
         )
     else:
-        losses = []
+        
+        if neox_args.do_distillation:
+            losses, lm_losses, kld_losses, mse_losses = [], [], [], []
+        else:
+            losses = []
+
         for _ in range(neox_args.gradient_accumulation_steps):
             # Forward model for one step.
             timers("forward").start()
@@ -496,7 +602,16 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
                 model=model,
             )
             timers("forward").stop()
-            losses.append(loss)
+            
+            if neox_args.do_distillation:
+                loss, lm_loss, kld_loss, mse_loss =  loss  
+                losses.append(loss)        
+                lm_losses.append(lm_loss)
+                kld_losses.append(kld_loss)
+                mse_losses.append(mse_loss)
+            else:
+                losses.append(loss)
+
             # Calculate gradients, reduce across processes, and clip.
             timers("backward").start()
             backward_step(
@@ -514,9 +629,18 @@ def train_step(neox_args, timers, data_iterator, model, optimizer, lr_scheduler)
             else:
                 raise ValueError("Must be using deepspeed to run neox")
             timers("optimizer").stop()
-        reduced_loss = {
-            "lm_loss": reduce_losses(losses).mean()
-        }  # reduces losses across machines for logging
+
+        if neox_args.do_distillation:
+            reduced_loss = {
+                "loss": reduce_losses(losses).mean(),
+                'lm_loss': reduce_losses(lm_losses).mean(), 
+                'kld_loss' : reduce_losses(kld_losses).mean(), 
+                'mse_loss' : reduce_losses(mse_losses).mean()
+                }
+        else:
+            reduced_loss = {
+                "lm_loss": reduce_losses(losses).mean()
+            }  # reduces losses across machines for logging
 
     if neox_args.precision == "fp16" and model.optimizer.overflow:
         skipped_iter = 1
@@ -531,7 +655,17 @@ def train_step_pipe(neox_args, timers, model, data_iterator):
 
     assert neox_args.deepspeed
     loss = model.train_batch(data_iter=data_iterator)
-    loss_dict = {"lm_loss": loss}
+    if neox_args.do_distillation:
+        lm_loss, kld_loss, mse_loss= model.module._losses
+        model.module._losses = None
+        loss_dict = {
+            'loss': loss,
+            'lm_loss': lm_loss, 
+            'kld_loss' : kld_loss, 
+            'mse_loss' : mse_loss
+            }
+    else:
+        loss_dict = {"lm_loss": loss}
     # Don't break Megatron's timers because we changed code paths.
     for t in [
         "forward",
@@ -671,7 +805,12 @@ def evaluate(
     """
     # Turn on evaluation mode which disables dropout.
     model.eval()
-    losses = []
+    
+    if neox_args.do_distillation:
+        losses, lm_losses, kld_losses, mse_losses = [], [], [], []
+    else:
+        losses = []
+
     if neox_args.char_level_ppl:
         data_iterator = CharCounter(data_iterator, neox_args.tokenizer)
 
@@ -699,7 +838,15 @@ def evaluate(
                     neox_args=neox_args,
                     timers=timers,
                 )
-                losses.append(loss)
+
+                if neox_args.do_distillation:
+                    loss, lm_loss, kld_loss, mse_loss =  loss  
+                    losses.append(loss)        
+                    lm_losses.append(lm_loss)
+                    kld_losses.append(kld_loss)
+                    mse_losses.append(mse_loss)
+                else:
+                    losses.append(loss)
 
             # When contiguous memory optimizations are enabled, the buffers
             # allocated by the optimizations are deallocated during backward pass
@@ -709,7 +856,17 @@ def evaluate(
                 deepspeed.checkpointing.reset()
 
     # reduces losses across processes for logging & run eval harness tasks
-    eval_results = {"lm_loss": reduce_losses(losses).mean().item()}
+    if neox_args.do_distillation:
+        eval_results = {
+            "loss": reduce_losses(losses).mean(),
+            'lm_loss': reduce_losses(lm_losses).mean(), 
+            'kld_loss' : reduce_losses(kld_losses).mean(), 
+            'mse_loss' : reduce_losses(mse_losses).mean()
+            }
+    else:
+        eval_results = {
+            "lm_loss": reduce_losses(losses).mean()
+        }  
     eval_results["lm_loss_ppl"] = math.exp(eval_results["lm_loss"])
 
     if neox_args.char_level_ppl:
