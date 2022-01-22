@@ -1,6 +1,7 @@
 # from megatron.model.word_embeddings import EmbeddingPipe, SoftEmbedding
 # from megatron.model.transformer import ParallelLinearPipe, NormPipe, ParallelTransformerLayerPipe
 # from megatron.model.gmlp import GMLPBlock
+from megatron import print_rank_0
 
 class DistilDecorator:
 
@@ -12,7 +13,11 @@ class DistilDecorator:
             def inner_inner_func(*args):
                 if DistilDecorator.do_distillation:
                     if is_class_function:
-                        self, prev_output, input_args, teacher_args, student_args = args
+                        self, args = args
+                        if len(args)!=4:
+                            args = args, (None, None, None), (None, None), (None, None)
+                        prev_output, input_args, teacher_args, student_args = args
+
                         # input_args = input_ids, postion_ids, and attention_mask
                         # teacher_args = hidden_states and output_logits
                         # student_args = hidden_states and output_logits
@@ -50,12 +55,28 @@ class DistilDecorator:
                                 teacher_args = (hidden_state, output_logit)
                                 cur_output = input_args
                             else:
+                                print_rank_0("called once !!!!!!!!!!!!!!!!!!!")
                                 student_args = (hidden_state, output_logit)
 
                     else:
+                        class_name = f"function: {class_func.__name__}"
                         non_class_func = class_func
-                        prev_output, input_args, teacher_args, student_args = args
+                        prev_output, input_args, teacher_args, student_args = args[0]
                         cur_output = non_class_func(prev_output)
+
+                    # input_ids, postion_ids, attention_mask = input_args
+                    # t_hidden_states, t_output_logits = teacher_args
+                    # s_hidden_states, s_output_logits = student_args
+                    # print_rank_0(
+                    #     class_name,
+                    #     "input_ids:", input_ids.shape if input_ids is not None else None,
+                    #     "postion_ids:", postion_ids.shape if postion_ids is not None  else None,
+                    #     "attention_mask:", attention_mask.shape if attention_mask is not None  else None,
+                    #     "t_hidden_states:", t_hidden_states.shape if t_hidden_states is not None  else None,
+                    #     "t_output_logits:", t_output_logits.shape if t_output_logits is not None  else None,
+                    #     "s_hidden_states:", s_hidden_states.shape if s_hidden_states is not None  else None,
+                    #     "s_output_logits:", s_output_logits.shape if s_output_logits is not None  else None,
+                    # )
 
                     return cur_output, input_args, teacher_args, student_args
 
