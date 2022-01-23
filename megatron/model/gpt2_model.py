@@ -42,6 +42,117 @@ def gpt2_attention_mask_func(attention_scores, ltor_mask):
     attention_scores.masked_fill_(ltor_mask, -10000.0)
     return attention_scores
 
+def get_topk_mask(teacher_logits, topk=1024):
+    device = teacher_logits.device
+    batch_size, seq_len, hidden_size = teacher_logits.shape
+    start_indicies = torch.arange(batch_size*seq_len) * hidden_size
+
+    top_k_indicies = torch.topk(teacher_logits, topk, sorted=False)[1]
+    top_k_indicies = top_k_indicies.to(device).view(-1,topk) + start_indicies.to(device).unsqueeze(-1).expand(-1,topk)
+    top_k_indicies = top_k_indicies.flatten()
+
+    mask = torch.zeros_like(teacher_logits, dtype=torch.bool).to(device).flatten()
+    mask[top_k_indicies.long()] = True
+    mask = mask.view(batch_size, seq_len, hidden_size)
+    return mask, topk
+
+def topk_kldiv(output, labels, topk):
+
+    batch_size, seq_len, hidden_size = output.shape
+    soft_output = torch.nn.Softmax(dim=2)(output)
+    soft_labels = torch.nn.Softmax(dim=2)(labels)
+
+    mask, topk = get_topk_mask(soft_labels, topk)
+    masked_logits_shape = (-1, topk)
+
+    masked_soft_output = soft_output[mask].view(*masked_logits_shape)
+    masked_soft_output = masked_soft_output.add(1e-5)
+    masked_soft_labels = soft_labels[mask].view(*masked_logits_shape)
+    masked_soft_labels = torch.nn.Softmax()(masked_soft_labels)
+    losses = torch.nn.KLDivLoss(reduction='sum')(masked_soft_output.log(), masked_soft_labels)/(batch_size * seq_len)
+    return losses
+
+def kldiv_loss_fn(output, labels, topk=None, _fp16=False):
+
+    labels, loss_mask = labels[0], labels[1]
+
+    output = output.float().contiguous() if _fp16 else output.contiguous()
+    labels = labels.float().contiguous() if _fp16 else labels.contiguous()
+    
+    if _fp16:
+        assert (output.dtype == torch.half and labels.dtype == torch.half and loss_mask.dtype == torch.half)
+
+    if topk is not None:
+        #mask, topk = get_topk_mask(labels, topk)
+        #masked_logits_shape = labels.shape[:-1] + (topk,)
+
+        #losses = mpu.loss.vocab_parallel_KLDivLoss(output[mask].view(*masked_logits_shape),
+        #                                           labels[mask].view(*masked_logits_shape))
+
+        return topk_kldiv(output, labels, topk)
+    else:
+        losses = mpu.loss.vocab_parallel_KLDivLoss(output, labels)
+
+    loss_mask = loss_mask.view(-1)
+    loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
+    return loss
+
+def mse_loss_fn(output, labels, _fp16=False):
+
+    labels, loss_mask = labels[0], labels[1]
+    if _fp16:
+        assert (output.dtype == torch.half and labels.dtype == torch.half and loss_mask.dtype == torch.half)
+        losses = mpu.loss.vocab_parallel_MSELoss(output.contiguous(), labels.contiguous())
+    else:
+        losses = mpu.loss.vocab_parallel_MSELoss(output.float().contiguous(), labels.float().contiguous())
+    loss_mask = loss_mask.view(-1)
+    loss = torch.sum(losses.view(-1) * loss_mask) / loss_mask.sum()
+    return loss
+
+def combined_loss_fn(output, labels, self, alpha_lm=0, alpha_kld=0, alpha_mse=0, _fp16=False):
+    labels, loss_mask = labels[0], labels[1]
+    prev_output, input_args, teacher_args, student_args = output
+    teacher_hidden_states ,teacher_logits = teacher_args
+    student_hidden_states, student_logits = student_args
+    
+    del prev_output
+    del input_args
+    del teacher_hidden_states
+    del student_hidden_states
+
+    mse_loss = torch.tensor(0).to(student_logits)
+    if alpha_mse > 0:
+        mse_loss = mse_loss_fn(student_logits, (teacher_logits, loss_mask), _fp16=_fp16)
+        mse_loss += alpha_mse * mse_loss
+
+    kld_loss = torch.tensor(0).to(student_logits)
+    if alpha_kld > 0:
+        kld_loss = kldiv_loss_fn(student_logits, (teacher_logits, loss_mask), _fp16=_fp16)
+        kld_loss += alpha_kld * kld_loss
+    
+    lm_loss = torch.tensor(0).to(student_logits)
+    if alpha_lm > 0:
+        lm_loss = cross_entropy(student_logits, (labels, loss_mask), _fp16=_fp16)
+        lm_loss = alpha_lm * lm_loss
+    
+    loss = lm_loss + kld_loss + mse_loss
+    count = torch.tensor(1).to(lm_loss.device)
+
+    torch.distributed.all_reduce(count, group=mpu.get_data_parallel_group())
+    torch.distributed.all_reduce(lm_loss, group=mpu.get_data_parallel_group())
+    torch.distributed.all_reduce(kld_loss, group=mpu.get_data_parallel_group())
+    torch.distributed.all_reduce(mse_loss, group=mpu.get_data_parallel_group())
+
+    count = count * self.gradient_accumulation_steps
+    if self._losses==None:
+        self._losses = [lm_loss.clone().detach()/count,
+                        kld_loss.clone().detach()/count,
+                        mse_loss.clone().detach()/count]
+    else:
+        self._losses[0] += lm_loss.clone().detach()/count
+        self._losses[1] += kld_loss.clone().detach()/count
+        self._losses[2] += mse_loss.clone().detach()/count
+    return loss
 
 def cross_entropy(output, labels, _fp16=False):
     """ From pretrain_gpt2:forward_step() """
@@ -121,7 +232,18 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
 
         self.specs = []
         self.init_specs()
-        loss_fn = partial(cross_entropy, _fp16=self.neox_args.fp16_lm_cross_entropy)
+
+        if self.neox_args.do_distillation:
+            loss_fn = partial(combined_loss_fn,
+                            self=self,
+                            alpha_lm=self.neox_args.alpha_lm,
+                            alpha_kld=self.neox_args.alpha_kld,
+                            alpha_mse=self.neox_args.alpha_mse,
+                            _fp16=self.fp16_lm_cross_entropy)
+
+        else:
+            loss_fn = partial(cross_entropy, _fp16=self.fp16_lm_cross_entropy)
+
         if self.neox_args.checkpoint_activations:
             interval = self.neox_args.checkpoint_num_layers
         else:

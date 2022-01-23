@@ -55,7 +55,7 @@ from megatron.utils import (
     get_total_params,
     CharCounter,
 )
-from megatron.model.gpt2_model import cross_entropy
+from megatron.model.gpt2_model import cross_entropy, kldiv_loss_fn, mse_loss_fn
 from eval_tasks import run_eval_harness
 
 
@@ -207,6 +207,9 @@ def forward_step(data_iterator, model, neox_args, timers, return_logits=False):
     if neox_args.is_pipe_parallel:
         return model.eval_batch(data_iterator, return_logits=return_logits)
 
+    if neox_args.do_distillation:
+        return distill_step(data_iterator, model, neox_args, timers, return_logits)
+
     # Get the batch.
     if timers is not None:
         timers("batch generator").start()
@@ -223,6 +226,48 @@ def forward_step(data_iterator, model, neox_args, timers, return_logits=False):
     if return_logits:
         return loss, outputs
     return loss
+
+def distill_step(data_iterator, model, neox_args, timers, return_logits=False):
+    """Forward step for distilation."""
+
+    # Get the batch.
+    timers('batch generator').start()
+    tokens, labels, loss_mask, attention_mask, position_ids = get_batch(neox_args=neox_args,
+                                                                        data_iterator=data_iterator)
+    timers('batch generator').stop()
+
+    output = model((tokens, position_ids, attention_mask))
+    prev_output, input_args, teacher_args, student_args = output
+    teacher_hidden_states ,teacher_logits = teacher_args
+    student_hidden_states, student_logits = student_args
+
+    # CosineEmbeddingLoss(teacher_hidden_states, student_hidden_states) to be implemented 
+    del prev_output
+    del input_args
+    del teacher_hidden_states
+    del student_hidden_states
+
+    mse_loss = torch.tensor(0).to(student_logits)
+    if neox_args.alpha_mse > 0:
+        mse_loss = mse_loss_fn(student_logits, (teacher_logits, loss_mask), _fp16=neox_args.reduce_loss_fp16)
+        mse_loss += neox_args.alpha_mse * mse_loss
+
+    kld_loss = torch.tensor(0).to(student_logits)
+    if neox_args.alpha_kld > 0:
+        kld_loss = kldiv_loss_fn(student_logits, (teacher_logits, loss_mask),  _fp16=neox_args.reduce_loss_fp16)
+        kld_loss += neox_args.alpha_kld * kld_loss
+       
+    lm_loss = torch.tensor(0).to(student_logits)
+    if neox_args.alpha_lm > 0:
+        lm_loss = cross_entropy(student_logits, (labels, loss_mask), _fp16=neox_args.reduce_loss_fp16)
+        lm_loss = neox_args.alpha_lm * lm_loss
+
+    loss = lm_loss + kld_loss + mse_loss
+    loses = (loss, lm_loss.clone().detach(), kld_loss.clone().detach(), mse_loss.clone().detach())
+    if return_logits:
+        return loses, (teacher_logits.clone().detach(), student_logits.clone().detach())
+    else:
+        return loses
 
 def get_distil_model(distil_neox_args):
     def load_model(distil_neox_args, is_teacher):
