@@ -145,4 +145,5 @@ class DistributedBatchSampler(data.sampler.BatchSampler):
             return batch[self.rank:self.batch_size:self.world_size]
         start = self.rank * self.batch_size // self.world_size
         end = (self.rank + 1) * self.batch_size // self.world_size
+        self.current_batch_idx = batch[start:end]
         return batch[start:end]

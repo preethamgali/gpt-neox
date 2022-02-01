@@ -55,7 +55,6 @@ class DistilDecorator:
                                 teacher_args = (hidden_state, output_logit)
                                 cur_output = input_args
                             else:
-                                print_rank_0("called once !!!!!!!!!!!!!!!!!!!")
                                 student_args = (hidden_state, output_logit)
 
                     else:

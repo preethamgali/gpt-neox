@@ -96,6 +96,8 @@ class NeoXArgs(*BASE_CLASSES):
         a number of functions are performed in order to
         calculate values, assert consistency and do typechecking.
         """
+        self.do_distillation = False
+        
         if not NeoXArgs.validate_keys():
             raise ValueError(
                 self.__class__.__name__

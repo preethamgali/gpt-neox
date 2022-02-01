@@ -143,7 +143,7 @@ def combined_loss_fn(output, labels, self, alpha_lm=0, alpha_kld=0, alpha_mse=0,
     torch.distributed.all_reduce(kld_loss, group=mpu.get_data_parallel_group())
     torch.distributed.all_reduce(mse_loss, group=mpu.get_data_parallel_group())
 
-    count = count * self.gradient_accumulation_steps
+    count = count * self.neox_args.gradient_accumulation_steps
     if self._losses==None:
         self._losses = [lm_loss.clone().detach()/count,
                         kld_loss.clone().detach()/count,
@@ -234,15 +234,16 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
         self.init_specs()
 
         if self.neox_args.do_distillation:
+            self._losses = None
             loss_fn = partial(combined_loss_fn,
                             self=self,
                             alpha_lm=self.neox_args.alpha_lm,
                             alpha_kld=self.neox_args.alpha_kld,
                             alpha_mse=self.neox_args.alpha_mse,
-                            _fp16=self.fp16_lm_cross_entropy)
+                            _fp16=self.neox_args.fp16_lm_cross_entropy)
 
         else:
-            loss_fn = partial(cross_entropy, _fp16=self.fp16_lm_cross_entropy)
+            loss_fn = partial(cross_entropy, _fp16=self.neox_args.fp16_lm_cross_entropy)
 
         if self.neox_args.checkpoint_activations:
             interval = self.neox_args.checkpoint_num_layers
