@@ -1,0 +1,8 @@
+# Config to cache model output data  
+{
+  "distil_data_gen":{
+    "save_dir" : "model_output",
+    "save_interval" : 100,
+    "save_hidden_state" : true # if false output logits are saved instead
+  }
+}

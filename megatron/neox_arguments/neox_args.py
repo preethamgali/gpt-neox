@@ -1020,3 +1020,10 @@ class NeoXArgsDistil(NeoXArgsTemplate):
     Move the cross entropy unreduced loss calculation for lm head to fp16.
     """
 
+@dataclass
+class NeoXArgsDistilDataGen(NeoXArgsTemplate):
+
+    distil_data_gen: dict = None
+    """
+    args related to data generation for distillation, to be used if needed to cache model output
+    """
