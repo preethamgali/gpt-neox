@@ -69,7 +69,6 @@ def save_output(neox_args,
                 model_output_filename_path):
 
     iteration = int(re.findall(r'\d+.dat', model_output_filename_path)[0].replace('.dat', ''))
-    # save_interval = 
     save_dir = neox_args.distil_data_gen['save_dir']
     save_hidden_state = neox_args.distil_data_gen['save_hidden_state']
 
@@ -85,6 +84,7 @@ def save_output(neox_args,
 
     torch.distributed.barrier()
     if torch.distributed.get_rank() == 0:
+
         print("Combining memmap array of all ranks")
         _index_and_dat_files = os.listdir(save_dir)
         files_to_combine = []
@@ -136,7 +136,6 @@ def save_output(neox_args,
             os.remove(os.path.join(save_dir, filename))
     torch.distributed.barrier()
 
-
 def generate_and_save(
     neox_args, data_iterator, model, verbose=False
 ):
@@ -152,9 +151,9 @@ def generate_and_save(
     # Turn on evaluation mode which disables dropout.
 
     model.eval()
-    save_interval = 100
+    save_interval = neox_args.distil_data_gen['save_interval']
 
-    iteration = 0
+    iteration = 1
     dataset_indicies = []
     start_index, end_index = 0, 0
     (fp16_np_memmap_array, 
@@ -197,9 +196,9 @@ def generate_and_save(
                             fp16_np_memmap_array, 
                             dataset_indicies, 
                             model_output_filename_path)
-                    
+
                 # TODO check if its not last iter
-                start_index, end_index = 0, 0
+                start_index, end_index = 0,0 
                 dataset_indicies = []
                 (fp16_np_memmap_array, 
                 model_output_filename_path) = numpy_memmap_file(neox_args, 
@@ -207,7 +206,7 @@ def generate_and_save(
                                                                 rank = torch.distributed.get_rank())
             iteration += 1
 
-    except Exception as e:
+    except Exception as e:       
         raise e
     finally: 
         save_output(neox_args,
