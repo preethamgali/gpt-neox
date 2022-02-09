@@ -108,19 +108,34 @@ def save_output(neox_args,
                                                         iteration, 
                                                         batch_size = batch_size)
 
-        start_index = 0
+        # start_index = 0
+        # for i, filename in enumerate(model_output_files):
+        #     dataset_indicies = all_indicies_files[i]
+        #     tensor_shape = (dataset_indicies.shape[0], 
+        #                     neox_args.seq_length, 
+        #                     neox_args.hidden_size if save_hidden_state else neox_args.padded_vocab_size)
+        #     saved_model_output_filename_path = os.path.join(save_dir, filename)
+        #     dtype = 'float16' if neox_args.fp16['enabled'] else 'float32'
+        #     fp16_np_memmap_array_of_rank = np.memmap(saved_model_output_filename_path, dtype=dtype, mode='r+', shape=tensor_shape)
+        #     end_index = start_index + tensor_shape[0]
+        #     assert (end_index-start_index) == tensor_shape[0], f'shape doesnt match {end_index-start_index} != {tensor_shape[0]}' 
+        #     fp16_np_memmap_array[start_index:end_index, :, :] = fp16_np_memmap_array_of_rank
+        #     start_index = end_index
+        #     del fp16_np_memmap_array_of_rank
+
+        sorted_arg_indicies= np.argsort(all_indicies)
+        start = 0
         for i, filename in enumerate(model_output_files):
             dataset_indicies = all_indicies_files[i]
+            end = start + dataset_indicies.shape[0]
             tensor_shape = (dataset_indicies.shape[0], 
                             neox_args.seq_length, 
                             neox_args.hidden_size if save_hidden_state else neox_args.padded_vocab_size)
             saved_model_output_filename_path = os.path.join(save_dir, filename)
             dtype = 'float16' if neox_args.fp16['enabled'] else 'float32'
             fp16_np_memmap_array_of_rank = np.memmap(saved_model_output_filename_path, dtype=dtype, mode='r+', shape=tensor_shape)
-            end_index = start_index + tensor_shape[0]
-            assert (end_index-start_index) == tensor_shape[0], f'shape doesnt match {end_index-start_index} != {tensor_shape[0]}' 
-            fp16_np_memmap_array[start_index:end_index, :, :] = fp16_np_memmap_array_of_rank
-            start_index = end_index
+            fp16_np_memmap_array[sorted_arg_indicies[start:end], :, :] = fp16_np_memmap_array_of_rank
+            start = end
             del fp16_np_memmap_array_of_rank
 
         dataset_indicies_path = model_output_filename_path.replace(".dat", ".index")
@@ -129,8 +144,8 @@ def save_output(neox_args,
             f"and dataset index to {dataset_indicies_path}")
         fp16_np_memmap_array.flush() 
         del fp16_np_memmap_array
-        dataset_indicies = np.asarray(dataset_indicies)
-        np.save(dataset_indicies_path, dataset_indicies)
+        # dataset_indicies = np.asarray(dataset_indicies)
+        np.save(dataset_indicies_path, all_indicies[sorted_arg_indicies])
 
         for filename in files_to_combine:
             os.remove(os.path.join(save_dir, filename))
@@ -153,7 +168,7 @@ def generate_and_save(
     model.eval()
     save_interval = neox_args.distil_data_gen['save_interval']
 
-    iteration = 1
+    iteration = 0
     dataset_indicies = []
     start_index, end_index = 0, 0
     (fp16_np_memmap_array, 
@@ -190,14 +205,14 @@ def generate_and_save(
             if neox_args.deepspeed and neox_args.deepspeed_activation_checkpointing:
                 deepspeed.checkpointing.reset()
 
-            if iteration % save_interval == 0 and iteration != 0:
+            if iteration % save_interval == 0:
+
                 # TODO save last iter if the iteration<save_interval
                 save_output(neox_args,
                             fp16_np_memmap_array, 
                             dataset_indicies, 
                             model_output_filename_path)
-
-                # TODO check if its not last iter
+                
                 start_index, end_index = 0,0 
                 dataset_indicies = []
                 (fp16_np_memmap_array, 
