@@ -27,9 +27,9 @@ def forward_step(data_iterator, model, neox_args):
     
     outputs = model((tokens, position_ids, attention_mask))
 
-    return outputs
+    return tokens, outputs
 
-def numpy_memmap_file(neox_args, iteration, rank = None, batch_size = None):
+def numpy_memmap_file(neox_args, iteration, rank = None, batch_size = None, data_type='INPUT'):
 
     save_dir = neox_args.distil_data_gen['save_dir']
     save_interval = neox_args.distil_data_gen['save_interval']
@@ -38,118 +38,27 @@ def numpy_memmap_file(neox_args, iteration, rank = None, batch_size = None):
     if not os.path.isdir(save_dir):
         os.makedirs(save_dir)
 
-    _dtype = 'fp16' if neox_args.fp16['enabled'] else 'fp32'
-
     if batch_size is None:
         batch_size = save_interval*neox_args.train_micro_batch_size_per_gpu
 
-    rank = rank if rank is not None else "_all"
-    
-    if save_hidden_state:
-        model_output_filename = f"model_last_hidden_state_{_dtype}_rank{rank}_iter{iteration}.dat"
+    if data_type=='OUTPUT':
+        _dtype = 'fp16' if neox_args.fp16['enabled'] else 'fp32'
         tensor_shape = (batch_size, 
                         neox_args.seq_length, 
-                        neox_args.hidden_size)
-    else:
-        model_output_filename = f"model_output_logit_{_dtype}_rank{rank}_iter{iteration}.dat"
+                        neox_args.hidden_size if save_hidden_state else neox_args.padded_vocab_size)
+        filename = f"distil_data_{_dtype}_rank{rank}_iter{iteration}_shape_{tensor_shape[0]}_{tensor_shape[1]}_{tensor_shape[2]}.output.dat"
+        dtype = 'float16' if neox_args.fp16['enabled'] else 'float32'
+
+    if data_type=='INPUT':
+        dtype = 'int64'
         tensor_shape = (batch_size, 
-                        neox_args.seq_length, 
-                        neox_args.padded_vocab_size)
+                        neox_args.seq_length)
+        filename = f"distil_data_{dtype}_rank{rank}_iter{iteration}_shape_{tensor_shape[0]}_{tensor_shape[1]}.input.dat"
 
-    model_output_filename_path = os.path.join(save_dir, model_output_filename)
+    filename_path = os.path.join(save_dir, filename)
+    np_memmap_array = np.memmap(filename_path, dtype=dtype, mode='w+', shape=tensor_shape)
 
-    dtype = 'float16' if neox_args.fp16['enabled'] else 'float32'
-    fp16_np_memmap_array = np.memmap(model_output_filename_path, dtype=dtype, mode='w+', shape=tensor_shape)
-
-    return fp16_np_memmap_array, model_output_filename_path
-
-def save_output(neox_args,
-                fp16_np_memmap_array, 
-                dataset_indicies, 
-                model_output_filename_path):
-
-    iteration = int(re.findall(r'\d+.dat', model_output_filename_path)[0].replace('.dat', ''))
-    save_dir = neox_args.distil_data_gen['save_dir']
-    save_hidden_state = neox_args.distil_data_gen['save_hidden_state']
-
-    dataset_indicies_path = model_output_filename_path.replace(".dat", ".index")
-    print(f"Iter {iteration}/{neox_args.train_iters} " ,
-            f"Rank {torch.distributed.get_rank()}: "
-            f"Saving model output to {model_output_filename_path}, "
-            f"and dataset index to {dataset_indicies_path}")
-    fp16_np_memmap_array.flush() 
-    del fp16_np_memmap_array
-    dataset_indicies = np.asarray(dataset_indicies)
-    np.save(dataset_indicies_path, dataset_indicies)
-
-    torch.distributed.barrier()
-    if torch.distributed.get_rank() == 0:
-
-        print("Combining memmap array of all ranks")
-        _index_and_dat_files = os.listdir(save_dir)
-        files_to_combine = []
-        for filename in _index_and_dat_files:
-            if "_all" in filename or f"iter{iteration}." not in filename: continue
-            if filename.endswith(".dat") or filename.endswith(".index.npy"):
-                if f"_iter{iteration}." in filename:
-                    files_to_combine.append(filename)
-
-        files_to_combine = sorted(files_to_combine)
-        model_output_files = [filename for filename in files_to_combine 
-                                        if filename.endswith(".dat")]
-
-        all_indicies_files = [np.load(os.path.join(save_dir, filename.replace(".dat", ".index.npy"))) 
-                                        for filename in model_output_files]
-        all_indicies = np.concatenate(all_indicies_files)
-        batch_size = all_indicies.shape[0]
-
-        (fp16_np_memmap_array, 
-        model_output_filename_path) = numpy_memmap_file(neox_args, 
-                                                        iteration, 
-                                                        batch_size = batch_size)
-
-        # start_index = 0
-        # for i, filename in enumerate(model_output_files):
-        #     dataset_indicies = all_indicies_files[i]
-        #     tensor_shape = (dataset_indicies.shape[0], 
-        #                     neox_args.seq_length, 
-        #                     neox_args.hidden_size if save_hidden_state else neox_args.padded_vocab_size)
-        #     saved_model_output_filename_path = os.path.join(save_dir, filename)
-        #     dtype = 'float16' if neox_args.fp16['enabled'] else 'float32'
-        #     fp16_np_memmap_array_of_rank = np.memmap(saved_model_output_filename_path, dtype=dtype, mode='r+', shape=tensor_shape)
-        #     end_index = start_index + tensor_shape[0]
-        #     assert (end_index-start_index) == tensor_shape[0], f'shape doesnt match {end_index-start_index} != {tensor_shape[0]}' 
-        #     fp16_np_memmap_array[start_index:end_index, :, :] = fp16_np_memmap_array_of_rank
-        #     start_index = end_index
-        #     del fp16_np_memmap_array_of_rank
-
-        sorted_arg_indicies= np.argsort(all_indicies)
-        start = 0
-        for i, filename in enumerate(model_output_files):
-            dataset_indicies = all_indicies_files[i]
-            end = start + dataset_indicies.shape[0]
-            tensor_shape = (dataset_indicies.shape[0], 
-                            neox_args.seq_length, 
-                            neox_args.hidden_size if save_hidden_state else neox_args.padded_vocab_size)
-            saved_model_output_filename_path = os.path.join(save_dir, filename)
-            dtype = 'float16' if neox_args.fp16['enabled'] else 'float32'
-            fp16_np_memmap_array_of_rank = np.memmap(saved_model_output_filename_path, dtype=dtype, mode='r+', shape=tensor_shape)
-            fp16_np_memmap_array[sorted_arg_indicies[start:end], :, :] = fp16_np_memmap_array_of_rank
-            start = end
-            del fp16_np_memmap_array_of_rank
-
-        dataset_indicies_path = model_output_filename_path.replace(".dat", ".index")
-        print(f"Rank all: ",
-            f"Saving model output to {model_output_filename_path} "
-            f"and dataset index to {dataset_indicies_path}")
-        fp16_np_memmap_array.flush() 
-        del fp16_np_memmap_array
-        # dataset_indicies = np.asarray(dataset_indicies)
-        np.save(dataset_indicies_path, all_indicies[sorted_arg_indicies])
-
-        for filename in files_to_combine:
-            os.remove(os.path.join(save_dir, filename))
-    torch.distributed.barrier()
+    return np_memmap_array, filename_path
 
 def generate_and_save(
     neox_args, data_iterator, model, verbose=False
@@ -169,12 +78,19 @@ def generate_and_save(
     save_interval = neox_args.distil_data_gen['save_interval']
 
     iteration = 0
-    dataset_indicies = []
     start_index, end_index = 0, 0
-    (fp16_np_memmap_array, 
+    (np_memmap_array_model_output, 
     model_output_filename_path) = numpy_memmap_file(neox_args, 
                                                     iteration, 
-                                                    rank = torch.distributed.get_rank())
+                                                    rank = torch.distributed.get_rank(),
+                                                    data_type='OUTPUT')
+                                                    
+    (np_memmap_array_model_input, 
+    model_input_filename_path) = numpy_memmap_file(neox_args, 
+                                                    iteration, 
+                                                    rank = torch.distributed.get_rank(),
+                                                    data_type='INPUT')
+
 
     try:
         while iteration < neox_args.train_iters:
@@ -183,21 +99,19 @@ def generate_and_save(
                     "Iter {}/{}".format(iteration, neox_args.train_iters)
                 )
 
-            dataset_indicies += data_iterator._index_sampler.current_batch_idx
-
             with torch.no_grad():
                 # Forward evaluation
-                outputs = forward_step(
+                tokens, outputs = forward_step(
                     model=model,
                     data_iterator=data_iterator,
                     neox_args=neox_args,
                 )
 
             end_index = start_index + outputs.shape[0]
-            # assert fp16_np_memmap_array[start_index: end_index, :, :].shape == outputs.shape, \
-            #         f'Shape mismatch {fp16_np_memmap_array[start_index: end_index, :, :].shape} != {outputs.shape}'
-            fp16_np_memmap_array[start_index: end_index, :, :] = outputs.cpu().detach().numpy()
+            np_memmap_array_model_input[start_index: end_index, ...] = tokens.cpu().detach().numpy()
+            np_memmap_array_model_output[start_index: end_index, ...] = outputs.cpu().detach().numpy()
             start_index = end_index
+
             # When contiguous memory optimizations are enabled, the buffers
             # allocated by the optimizations are deallocated during backward pass
             # in the absence of backward pass the buffers should be reset after each
@@ -207,27 +121,45 @@ def generate_and_save(
 
             if iteration % save_interval == 0:
 
-                # TODO save last iter if the iteration<save_interval
-                save_output(neox_args,
-                            fp16_np_memmap_array, 
-                            dataset_indicies, 
-                            model_output_filename_path)
+                print(f"Iter {iteration}/{neox_args.train_iters} " ,
+                        f"Rank {torch.distributed.get_rank()}: "
+                        f"Saving model output to {model_output_filename_path}, ",
+                        f"Saving model input to {model_input_filename_path}, ")
+
+                np_memmap_array_model_output.flush() 
+                np_memmap_array_model_input.flush() 
+
+                del np_memmap_array_model_output
+                del np_memmap_array_model_input
+
                 
                 start_index, end_index = 0,0 
-                dataset_indicies = []
-                (fp16_np_memmap_array, 
+                (np_memmap_array_model_output, 
                 model_output_filename_path) = numpy_memmap_file(neox_args, 
                                                                 iteration, 
-                                                                rank = torch.distributed.get_rank())
+                                                                rank = torch.distributed.get_rank(),
+                                                                data_type='OUTPUT')
+
+                (np_memmap_array_model_input, 
+                model_input_filename_path) = numpy_memmap_file(neox_args, 
+                                                                iteration, 
+                                                                rank = torch.distributed.get_rank(),
+                                                                data_type='INPUT')
             iteration += 1
 
     except Exception as e:       
         raise e
     finally: 
-        save_output(neox_args,
-                    fp16_np_memmap_array, 
-                    dataset_indicies, 
-                    model_output_filename_path)
+        print(f"Iter {iteration}/{neox_args.train_iters} " ,
+                f"Rank {torch.distributed.get_rank()}: "
+                f"Saving model output to {model_output_filename_path}, ",
+                f"Saving model input to {model_input_filename_path}, ")
+
+        np_memmap_array_model_output.flush() 
+        np_memmap_array_model_input.flush() 
+
+        del np_memmap_array_model_output
+        del np_memmap_array_model_input
 
     # Move model back to the train mode.
     model.train()
@@ -269,7 +201,8 @@ def get_model():
     return model, neox_args
 
 def main():
-
+    #TODO: make sure model is loaded
+    #save the config of loaded model
     model, neox_args = get_model()
     neox_args.train_iters = calulaute_n_iters(neox_args)
     train_data_iterator, _, _, = build_train_valid_test_data_iterators(neox_args=neox_args)
