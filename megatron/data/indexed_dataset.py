@@ -573,3 +573,108 @@ class MMapIndexedDatasetBuilder(object):
 
         with MMapIndexedDataset.Index.writer(index_file, self._dtype) as index:
             index.write(self._sizes, self._doc_idx)
+
+import re
+class MMapModelOutputSavedDataset(torch.utils.data.Dataset):
+
+    def __init__(self, path):
+        super().__init__()
+
+        self._path = path
+        self.do_mapping()
+
+        self.prev_fileidx = None
+        self.model_output_memmap_file = None
+        self.model_input_memmap_file = None
+
+    def do_mapping(self):
+
+        all_files = os.listdir(self._path)
+        self.model_output_filename = []
+        self.model_input_filename = []
+        self.idx2file = {}
+        self.file2shape = {}
+        if not all_files:
+            print('No files found in {self._path}')
+            return 
+
+        model_output_files = [filename for filename in all_files if filename.endswith('.output.dat')]
+        model_input_files = [filename for filename in all_files if filename.endswith('.input.dat')]
+
+        for input_filename in model_input_files:
+            input_filename_prefix = input_filename.split('_type_')[0]
+            for output_filename in model_output_files:
+                output_filename_prefix = output_filename.split('_type_')[0]
+                if input_filename_prefix == output_filename_prefix:
+                    self.model_output_filename.append(output_filename)
+                    self.model_input_filename.append(input_filename)
+                    break
+            
+        idx = 0
+        for file_idx, filename in enumerate(self.model_output_files):
+            array_shape = filename.split('_shape_')[-1].split('.')[0]
+            batch_size = int(re.finall(r'\d+', array_shape)[0])
+            self.file2shape[file_idx] = (int(axis_size) for axis_size in array_shape)
+            for local_idx in range(batch_size):
+                self.idx2file[idx] = (file_idx, local_idx)
+                idx += 1
+
+        self.length = len(self.idx2file)
+
+    def __len__(self):
+        return self.length
+
+    def get_memmap_data(self, file_idx, local_idx):
+
+        if self.prev_fileidx != file_idx:
+
+            del self.model_output_memmap_file
+            del self.model_input_memmap_file
+
+            model_output_memmap_file_path = os.path.join(self._path, self.model_output_filename[file_idx])
+            model_input_memmap_filen_path = os.path.join(self._path, self.model_input_filename[file_idx])
+            self.prev_fileidx = file_idx
+
+            (batch_size, seq_len, tkn_output_len) = self.file2shape[file_idx]
+
+            model_output_shape = (batch_size, seq_len, tkn_output_len)
+            model_input_shape = (batch_size, seq_len)
+
+            model_output_dtype = 'float16'  if '_type_fp16' in self.model_output_filename[file_idx] else 'float32'
+            model_input_dtype = 'int64'
+
+            self.model_output_memmap_file = np.memmap(model_output_memmap_file_path, 
+                                                      dtype=model_output_dtype, 
+                                                      mode='r', 
+                                                      shape=model_output_shape)
+            self.model_input_memmap_file = np.memmap(model_input_memmap_filen_path, 
+                                                     dtype=model_input_dtype, 
+                                                     mode='r', 
+                                                     shape=model_input_shape)
+
+        return (self.model_output_memmap_file[local_idx:local_idx+1], self.model_input_memmap_file[local_idx:local_idx+1])
+
+    def __getitem__(self, idx):
+
+        file_idx, local_idx = self.idx2file[idx]
+        memmap_data =  self.get_memmap_data(file_idx, local_idx)
+        data_dict = {
+                        'tokens': memmap_data[0], 
+                        'outputs': memmap_data[1]
+                    }
+        return data_dict
+
+
+    def __del__(self):
+
+        del self.model_input_memmap_file
+        del self.model_output_memmap_file
+        
+
+
+
+
+
+
+
+        

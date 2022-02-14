@@ -46,14 +46,14 @@ def numpy_memmap_file(neox_args, iteration, rank = None, batch_size = None, data
         tensor_shape = (batch_size, 
                         neox_args.seq_length, 
                         neox_args.hidden_size if save_hidden_state else neox_args.padded_vocab_size)
-        filename = f"distil_data_{_dtype}_rank{rank}_iter{iteration}_shape_{tensor_shape[0]}_{tensor_shape[1]}_{tensor_shape[2]}.output.dat"
+        filename = f"distil_data_rank{rank}_iter{iteration}_type_{_dtype}_shape_{tensor_shape[0]}_{tensor_shape[1]}_{tensor_shape[2]}.output.dat"
         dtype = 'float16' if neox_args.fp16['enabled'] else 'float32'
 
     if data_type=='INPUT':
         dtype = 'int64'
         tensor_shape = (batch_size, 
                         neox_args.seq_length)
-        filename = f"distil_data_{dtype}_rank{rank}_iter{iteration}_shape_{tensor_shape[0]}_{tensor_shape[1]}.input.dat"
+        filename = f"distil_data_rank{rank}_iter{iteration}_type_{dtype}_shape_{tensor_shape[0]}_{tensor_shape[1]}.input.dat"
 
     filename_path = os.path.join(save_dir, filename)
     np_memmap_array = np.memmap(filename_path, dtype=dtype, mode='w+', shape=tensor_shape)
