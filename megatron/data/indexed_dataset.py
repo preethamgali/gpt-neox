@@ -574,7 +574,11 @@ class MMapIndexedDatasetBuilder(object):
         with MMapIndexedDataset.Index.writer(index_file, self._dtype) as index:
             index.write(self._sizes, self._doc_idx)
 
+import os
 import re
+import numpy as np
+import torch
+
 class MMapModelOutputSavedDataset(torch.utils.data.Dataset):
 
     def __init__(self, path):
@@ -611,9 +615,10 @@ class MMapModelOutputSavedDataset(torch.utils.data.Dataset):
                     break
             
         idx = 0
-        for file_idx, filename in enumerate(self.model_output_files):
+        for file_idx, filename in enumerate(self.model_output_filename):
             array_shape = filename.split('_shape_')[-1].split('.')[0]
-            batch_size = int(re.finall(r'\d+', array_shape)[0])
+            array_shape = re.findall(r'\d+', array_shape)
+            batch_size = int(array_shape[0])
             self.file2shape[file_idx] = (int(axis_size) for axis_size in array_shape)
             for local_idx in range(batch_size):
                 self.idx2file[idx] = (file_idx, local_idx)
@@ -652,7 +657,7 @@ class MMapModelOutputSavedDataset(torch.utils.data.Dataset):
                                                      mode='r', 
                                                      shape=model_input_shape)
 
-        return (self.model_output_memmap_file[local_idx:local_idx+1], self.model_input_memmap_file[local_idx:local_idx+1])
+        return (self.model_input_memmap_file[local_idx:local_idx+1], self.model_output_memmap_file[local_idx:local_idx+1])
 
     def __getitem__(self, idx):
 
@@ -669,12 +674,4 @@ class MMapModelOutputSavedDataset(torch.utils.data.Dataset):
 
         del self.model_input_memmap_file
         del self.model_output_memmap_file
-        
-
-
-
-
-
-
-
         
