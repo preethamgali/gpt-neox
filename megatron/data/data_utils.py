@@ -7,8 +7,9 @@ from functools import partial
 
 from megatron import mpu, print_rank_0
 from megatron.data.indexed_dataset import make_dataset as make_indexed_dataset
+from megatron.data.indexed_dataset import MMapModelOutputSavedDataset
 from megatron.data.blendable_dataset import BlendableDataset
-from megatron.data.gpt2_dataset import GPT2Dataset
+from megatron.data.gpt2_dataset import GPT2Dataset, GPT2DatasetWithModelOutput
 from megatron.data.samplers import DistributedBatchSampler
 
 
@@ -58,6 +59,45 @@ def build_the_dataset(data_prefix, name, data_impl,
                           build_index_mappings=build_index_mappings)
     return dataset
 
+def build_the_dataset_output_cached(data_prefix, name, data_impl, samples_start, samples_end,
+                                    expected_tkn_output_len, expected_dtype='float16', 
+                                    expect_hidden_state=True):
+    """Build train/valid/test datasets."""
+
+    if data_impl == 'mmap':
+        pass
+    else:
+        print(f"Unknown dataset implementation: {data_impl} for saved model output for distilation")
+
+    indexed_dataset = MMapModelOutputSavedDataset(path=data_prefix)
+
+    total_num_of_samples = samples_end - samples_start
+    print_rank_0('    {}:'.format(name))
+    print_rank_0('     no. of samples:{}'.format(total_num_of_samples))    
+    dataset = None
+    samples = np.arange(start=samples_start, stop=samples_end,
+                          step=1, dtype=np.int32)
+    dataset = GPT2DatasetWithModelOutput(name, data_prefix,
+                          samples, indexed_dataset)
+
+    def validate_data():
+        sample = dataset[0]['outputs']
+        saved_seq_len = sample[1]
+        saved_tkn_output = sample[2]
+
+        assert sample.dtype == np.dtype(expected_dtype), \
+                        f'dtype doesnt match expected {np.dtype(expected_dtype)} but saved data has {sample.dtype}'        
+        assert saved_seq_len == expected_tkn_output_len, \
+                        f'Seq length doesnt match expected {expected_tkn_output_len} but saved data has {saved_seq_len}'
+        if expect_hidden_state:
+            assert saved_tkn_output == expected_tkn_output_len, \
+                        f'Hidden state size doesnt match expected {expected_tkn_output_len} but saved data has {saved_tkn_output}'
+        else:
+            assert saved_tkn_output == expected_tkn_output_len, \
+                        f'Model output logit size doesnt match expected {expected_tkn_output_len} but saved data has {saved_tkn_output}'      
+
+    validate_data()
+    return dataset
 
 def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
                                     train_valid_test_num_samples,
@@ -103,6 +143,68 @@ def build_train_valid_test_datasets(data_prefix, data_impl, splits_string,
 
     return train_dataset, valid_dataset, test_dataset
 
+def build_train_valid_test_datasets_output_cached(data_prefix, data_impl, splits_string,
+                                    expected_seq_length, expected_tkn_output_len, 
+                                    expected_dtype='float16', expect_hidden_state=True):
+
+    """Build train/valid/test datasets."""
+
+    if data_impl == 'mmap':
+        pass
+    else:
+        print(f"Unknown dataset implementation: {data_impl} for saved model output for distilation")
+
+    # Indexed dataset.
+    indexed_dataset = MMapModelOutputSavedDataset(path=data_prefix)
+    total_num_of_samples = len(indexed_dataset)    
+
+    splits = get_train_valid_test_split_(splits_string, total_num_of_samples)
+
+    # Print stats about the splits.
+    print_rank_0(' > dataset split:')
+
+    def print_split_stats(name, index):
+        print_rank_0('    {}:'.format(name))
+        print_rank_0('     document indices in [{}, {}) total of {} '
+                     'documents'.format(splits[index], splits[index + 1],
+                                        splits[index + 1] - splits[index]))
+
+    print_split_stats('train', 0)
+    print_split_stats('validation', 1)
+    print_split_stats('test', 2)
+
+    def build_dataset(index, name):
+        dataset = None
+        if splits[index + 1] > splits[index]:
+            samples = np.arange(start=splits[index], stop=splits[index + 1],
+                                  step=1, dtype=np.int32)
+
+        dataset = GPT2DatasetWithModelOutput(name, data_prefix,
+                            samples, indexed_dataset)
+        def validate_data():
+            sample = dataset[0]['outputs']
+            saved_seq_len = sample[1]
+            saved_tkn_output = sample[2]
+            
+            assert sample.dtype == np.dtype(expected_dtype), \
+                            f'dtype doesnt match expected {np.dtype(expected_dtype)} but saved data has {sample.dtype}' 
+            assert saved_seq_len == expected_seq_length, \
+                            f'Seq length doesnt match expected {expected_seq_length} but saved data has {saved_seq_len}'
+            if expect_hidden_state:
+                assert saved_tkn_output == expected_tkn_output_len, \
+                            f'Hidden state size doesnt match expected {expected_tkn_output_len} but saved data has {saved_tkn_output}'
+            else:
+                assert saved_tkn_output == expected_tkn_output_len, \
+                            f'Model output logit size doesnt match expected {expected_tkn_output_len} but saved data has {saved_tkn_output}'      
+
+        validate_data()
+        return dataset
+
+    train_dataset = build_dataset(0, 'train')
+    valid_dataset = build_dataset(1, 'valid')
+    test_dataset = build_dataset(2, 'test')
+
+    return train_dataset, valid_dataset, test_dataset
 
 def get_train_valid_test_split_(splits_string, size):
     """ Get dataset splits from comma or '/' separated string list."""
@@ -187,6 +289,49 @@ def build_weighted_datasets(neox_args, train_num_samples, valid_num_samples, tes
     return train_datasets, valid_datasets, test_datasets
 
 
+def build_weighted_datasets_output_cached(neox_args, train_num_samples, valid_num_samples, test_num_samples, train_weights, valid_weights, test_weights, build_index_mappings=True):
+    # build individual datasets
+    train_datasets, valid_datasets, test_datasets = [], [], []
+    expected_dtype = 'float16' if neox_args.fp16['enabled'] else 'float32'
+    expected_tkn_output_len = neox_args.hidden_size if neox_args.input_teacher_hidden_state else neox_args.padded_vocab_size
+
+    for i, (train_path, valid_path, test_path) in enumerate(zip_longest(neox_args.train_data_paths, neox_args.valid_data_paths, neox_args.test_data_paths)):
+        if train_path:
+            train_datasets.append(build_the_dataset_output_cached(
+                    data_prefix=neox_args.data_path,
+                    name=f'train_{i}',
+                    data_impl=neox_args.data_impl,
+                    samples_start=0, 
+                    samples_end=train_num_samples,
+                    expect_hidden_state=neox_args.input_teacher_hidden_state,
+                    expected_dtype=expected_dtype,
+                    expected_tkn_output_len=expected_tkn_output_len
+                ))
+        if valid_path:
+            valid_datasets.append(build_the_dataset_output_cached(
+                    data_prefix=neox_args.data_path,
+                    name=f'valid_{i}',
+                    data_impl=neox_args.data_impl,
+                    samples_start=train_num_samples, 
+                    samples_end=train_num_samples+valid_num_samples,
+                    expect_hidden_state=neox_args.input_teacher_hidden_state,
+                    expected_dtype=expected_dtype,
+                    expected_tkn_output_len=expected_tkn_output_len
+                ))
+
+        if test_path:
+            test_datasets.append(build_the_dataset_output_cached(
+                    data_prefix=neox_args.data_path,
+                    name=f'test_{i}',
+                    data_impl=neox_args.data_impl,
+                    samples_start=train_num_samples+valid_num_samples, 
+                    samples_end=train_num_samples+valid_num_samples+test_num_samples,
+                    expect_hidden_state=neox_args.input_teacher_hidden_state,
+                    expected_dtype=expected_dtype,
+                    expected_tkn_output_len=expected_tkn_output_len
+                ))  
+    return train_datasets, valid_datasets, test_datasets
+
 def weights_by_num_docs(l, alpha=0.3):
     """
     Builds weights from a multinomial distribution over groups of data according to the number of
@@ -255,7 +400,11 @@ def build_train_valid_test_data_iterators(neox_args):
             test_weights, test_num_samples = get_normalized_weights_and_num_samples(neox_args.test_data_weights, train_val_test_num_samples[2])
 
             # build individual datasets
-            train_datasets, valid_datasets, test_datasets = build_weighted_datasets(neox_args, train_num_samples, valid_num_samples, test_num_samples, train_weights, valid_weights, test_weights, \
+            if neox_args.do_distillation and (neox_args.input_teacher_hidden_state or neox_args.input_teacher_output):
+                assert not neox_args.fp16['enabled'], f"Expecting the fp16 training enabled but neox_args.fp16['enabled'] = {neox_args.fp16['enabled']}"
+                train_datasets, valid_datasets, test_datasets = build_weighted_datasets_output_cached(neox_args, train_num_samples, valid_num_samples, test_num_samples, train_weights, valid_weights, test_weights)
+            else:
+                train_datasets, valid_datasets, test_datasets = build_weighted_datasets(neox_args, train_num_samples, valid_num_samples, test_num_samples, train_weights, valid_weights, test_weights, \
                                                                                     build_index_mappings=not neox_args.weight_by_num_documents)
             
             if neox_args.weight_by_num_documents:
@@ -272,8 +421,11 @@ def build_train_valid_test_data_iterators(neox_args):
                 test_weights, test_num_samples = get_normalized_weights_and_num_samples(test_weights, train_val_test_num_samples[2])
                 
                 # rebuild datasets weighted according to new weights
-                train_datasets, valid_datasets, test_datasets = build_weighted_datasets(neox_args, train_num_samples, valid_num_samples, test_num_samples, train_weights, valid_weights, test_weights)
-            
+                if neox_args.do_distillation and (neox_args.input_teacher_hidden_state or neox_args.input_teacher_output):
+                    assert not neox_args.fp16['enabled'], f"Expecting the fp16 training enabled but neox_args.fp16['enabled'] = {neox_args.fp16['enabled']}"
+                    train_datasets, valid_datasets, test_datasets = build_weighted_datasets_output_cached(neox_args, train_num_samples, valid_num_samples, test_num_samples, train_weights, valid_weights, test_weights)
+                else:
+                    train_datasets, valid_datasets, test_datasets = build_weighted_datasets(neox_args, train_num_samples, valid_num_samples, test_num_samples, train_weights, valid_weights, test_weights)
             
             if train_datasets:
                 train_ds = BlendableDataset(train_datasets, train_weights)
@@ -284,15 +436,29 @@ def build_train_valid_test_data_iterators(neox_args):
         else:
             # when just data_path is provided
             # split dataset into train, valid and test from data_path
-            train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
-                data_prefix=neox_args.data_path,
-                data_impl=neox_args.data_impl,
-                splits_string=neox_args.split,
-                train_valid_test_num_samples=train_val_test_num_samples,
-                seq_length=neox_args.seq_length,
-                seed=neox_args.seed,
-                skip_warmup=(not neox_args.mmap_warmup)
-            )
+            if neox_args.do_distillation and (neox_args.input_teacher_hidden_state or neox_args.input_teacher_output):
+                assert not neox_args.fp16['enabled'], f"Expecting the fp16 training enabled but neox_args.fp16['enabled'] = {neox_args.fp16['enabled']}"
+
+                expected_dtype = 'float16' if neox_args.fp16['enabled'] else 'float32'
+                expected_tkn_output_len = neox_args.hidden_size if neox_args.input_teacher_hidden_state else neox_args.padded_vocab_size
+                train_ds, valid_ds, test_ds = build_train_valid_test_datasets_output_cached(
+                    data_prefix=neox_args.data_path,
+                    data_impl=neox_args.data_impl,
+                    splits_string=neox_args.split,
+                    expect_hidden_state=neox_args.input_teacher_hidden_state,
+                    expected_dtype=expected_dtype,
+                    expected_tkn_output_len=expected_tkn_output_len
+                )
+            else:
+                train_ds, valid_ds, test_ds = build_train_valid_test_datasets(
+                    data_prefix=neox_args.data_path,
+                    data_impl=neox_args.data_impl,
+                    splits_string=neox_args.split,
+                    train_valid_test_num_samples=train_val_test_num_samples,
+                    seq_length=neox_args.seq_length,
+                    seed=neox_args.seed,
+                    skip_warmup=(not neox_args.mmap_warmup)
+                )
 
         # Build dataloders.
         train_dataloader = make_data_loader(train_ds, neox_args=neox_args)

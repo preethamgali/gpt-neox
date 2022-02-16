@@ -85,6 +85,34 @@ class GPT2Dataset(torch.utils.data.Dataset):
             print(f'WARNING: Got index out of bounds error with index {idx} - taking modulo of index instead ({new_idx})')
             return self[new_idx]
 
+class GPT2DatasetWithModelOutput(torch.utils.data.Dataset):
+
+    def __init__(self, name, samples, indexed_dataset):
+
+        self.name = name
+        self.indexed_dataset = indexed_dataset
+        
+        self.samples = samples
+        self.min_sample_idx = np.min(samples)
+        self.max_sample_idx = np.max(samples)
+
+        # Checks
+        assert np.min(samples) >= 0
+        assert np.max(samples) < len(indexed_dataset)
+
+    def __len__(self):
+        return self.max_sample_idx-self.min_sample_idx
+
+    def __getitem__(self, idx):
+        try:
+            idx = self.samples[idx]
+            sample = self.indexed_dataset[idx]
+            # sample = {'tokens' : np.int64 data , 'outputs' : np.float16 or np.float32}
+            return sample
+        except IndexError:
+            new_idx = idx % len(self)
+            print(f'WARNING: Got index out of bounds error with index {idx} - taking modulo of index instead ({new_idx})')
+            return self[new_idx]
 
 def _build_index_mappings(name, data_prefix, documents, sizes,
                           num_samples, seq_length, seed):

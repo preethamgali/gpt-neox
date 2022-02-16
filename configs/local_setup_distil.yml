@@ -1,6 +1,7 @@
 # Suggested data paths when using GPT-NeoX locally
 {
-  "data-path": "data/enron/enron_text_document",
+  # "data-path": "data/enron/enron_text_document",
+  "data-path": "model_output/",
   
   # or for weighted datasets: 
   # "train-data-paths": ["data/enron/enron_text_document", "data/enron/enron_text_document"],
@@ -19,8 +20,8 @@
   "merge-file": "data/gpt2-merges.txt",
 
   "save": "checkpoints",
-  #"load": "checkpoints",
-  "load_teacher": "checkpoints/global_step1",
+  "load": "checkpoints",
+  # "load_teacher": "checkpoints/global_step1",
   "checkpoint_validation_with_forward_pass": False,
   
   "tensorboard-dir": "tensorboard",

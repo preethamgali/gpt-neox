@@ -154,7 +154,7 @@ def pretrain(neox_args):
 def _get_batch(neox_args, tokenizer, keys, data, datatype):
     """Support function for get_batch / get_batch pipe (to avoid code repetition)"""
     data_b = mpu.broadcast_data(keys, data, datatype)
-
+    print_rank_0(data_b)
     # Unpack.
     tokens_ = data_b["text"].long()
     labels = tokens_[:, 1:].contiguous()
