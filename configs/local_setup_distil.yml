@@ -23,6 +23,9 @@
   "load": "checkpoints",
   # "load_teacher": "checkpoints/global_step1",
   "checkpoint_validation_with_forward_pass": False,
+
+  "input_teacher_hidden_state":  False,
+  "input_teacher_output": True,
   
   "tensorboard-dir": "tensorboard",
   "log-dir": "logs",

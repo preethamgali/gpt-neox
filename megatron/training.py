@@ -293,7 +293,7 @@ def get_distil_model(distil_neox_args):
 
         # if teacher output logits are provided as input we dont need teacher model
         if distil_neox_args.input_teacher_output:
-            return student_model, list(student_model.named_parameters())
+            return student_model
 
         # if teacher hiddent_state are provided as input we only need last layer of teacher model
         if distil_neox_args.input_teacher_hidden_state:

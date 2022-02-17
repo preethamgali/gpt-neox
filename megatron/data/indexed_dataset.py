@@ -619,7 +619,7 @@ class MMapModelOutputSavedDataset(torch.utils.data.Dataset):
             array_shape = filename.split('_shape_')[-1].split('.')[0]
             array_shape = re.findall(r'\d+', array_shape)
             batch_size = int(array_shape[0])
-            self.file2shape[file_idx] = (int(axis_size) for axis_size in array_shape)
+            self.file2shape[file_idx] = ([int(axis_size) for axis_size in array_shape])
             for local_idx in range(batch_size):
                 self.idx2file[idx] = (file_idx, local_idx)
                 idx += 1
@@ -664,7 +664,7 @@ class MMapModelOutputSavedDataset(torch.utils.data.Dataset):
         file_idx, local_idx = self.idx2file[idx]
         memmap_data =  self.get_memmap_data(file_idx, local_idx)
         data_dict = {
-                        'tokens': memmap_data[0], 
+                        'text': memmap_data[0], 
                         'outputs': memmap_data[1]
                     }
         return data_dict
