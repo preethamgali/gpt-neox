@@ -70,6 +70,7 @@ def build_the_dataset_output_cached(data_prefix, name, data_impl, samples_start,
         print(f"Unknown dataset implementation: {data_impl} for saved model output for distilation")
 
     indexed_dataset = MMapModelOutputSavedDataset(path=data_prefix)
+    expected_dtype = torch.float16 if expected_dtype=='float16' else torch.float32
 
     total_num_of_samples = samples_end - samples_start
     print_rank_0('    {}:'.format(name))
@@ -81,11 +82,11 @@ def build_the_dataset_output_cached(data_prefix, name, data_impl, samples_start,
 
     def validate_data():
         sample = dataset[0]['outputs']
-        saved_seq_len = sample.shape[1]
-        saved_tkn_output = sample.shape[2]
-
-        assert sample.dtype == np.dtype(expected_dtype), \
-                        f'dtype doesnt match expected {np.dtype(expected_dtype)} but saved data has {sample.dtype}'        
+        saved_seq_len = sample.shape[0]
+        saved_tkn_output = sample.shape[1]
+        
+        assert sample.dtype == expected_dtype, \
+                        f'dtype doesnt match expected {expected_dtype} but saved data has {sample.dtype}'         
         assert saved_seq_len == expected_seq_len, \
                         f'Seq length doesnt match expected {expected_seq_len} but saved data has {saved_seq_len}'
         if expect_hidden_state:
@@ -155,6 +156,7 @@ def build_train_valid_test_datasets_output_cached(data_prefix, data_impl, splits
 
     # Indexed dataset.
     indexed_dataset = MMapModelOutputSavedDataset(path=data_prefix)
+    expected_dtype = torch.float16 if expected_dtype=='float16' else torch.float32
     total_num_of_samples = len(indexed_dataset)    
 
     splits = get_train_valid_test_split_(splits_string, total_num_of_samples)
@@ -182,11 +184,11 @@ def build_train_valid_test_datasets_output_cached(data_prefix, data_impl, splits
 
         def validate_data():
             sample = dataset[0]['outputs']
-            saved_seq_len = sample.shape[1]
-            saved_tkn_output = sample.shape[2]
+            saved_seq_len = sample.shape[0]
+            saved_tkn_output = sample.shape[1]
             
-            assert sample.dtype == np.dtype(expected_dtype), \
-                            f'dtype doesnt match expected {np.dtype(expected_dtype)} but saved data has {sample.dtype}' 
+            assert sample.dtype == expected_dtype, \
+                            f'dtype doesnt match expected {expected_dtype} but saved data has {sample.dtype}' 
             assert saved_seq_len == expected_seq_len, \
                             f'Seq length doesnt match expected {expected_seq_len} but saved data has {saved_seq_len}'
             if expect_hidden_state:

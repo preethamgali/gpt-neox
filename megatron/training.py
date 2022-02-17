@@ -151,10 +151,11 @@ def pretrain(neox_args):
         )
 
 
-def _get_batch(neox_args, tokenizer, keys, data, datatype):
+def _get_batch(neox_args, tokenizer, keys, data, datatypes):
     """Support function for get_batch / get_batch pipe (to avoid code repetition)"""
-    data_b = mpu.broadcast_data(keys, data, datatype)
-    print_rank_0(data_b)
+    
+    data_b = mpu.broadcast_data([keys[0]], data, datatypes[0])
+
     # Unpack.
     tokens_ = data_b["text"].long()
     labels = tokens_[:, 1:].contiguous()
@@ -165,6 +166,10 @@ def _get_batch(neox_args, tokenizer, keys, data, datatype):
         tokens, tokenizer.eod, neox_args.eod_mask_loss
     )
 
+    if len(keys)>1:
+        data_output_b = mpu.broadcast_data([keys[1]], data, datatypes[1])
+        return tokens, labels, loss_mask, attention_mask, position_ids, data_output_b
+
     return tokens, labels, loss_mask, attention_mask, position_ids
 
 
@@ -173,19 +178,25 @@ def get_batch(neox_args, data_iterator):
 
     # Items and their type.
     keys = ["text"]
-    datatype = torch.int64
+    datatypes = [torch.int64]
 
     # Broadcast data.
     if data_iterator is not None:
         data = next(data_iterator)
     else:
         data = None
+
+    if neox_args.do_distillation and (neox_args.input_teacher_hidden_state or neox_args.input_teacher_output):
+        assert neox_args.fp16['enabled'], f"Expecting the fp16 training enabled but neox_args.fp16['enabled'] = {neox_args.fp16['enabled']}"
+        keys += ["outputs"]
+        datatypes += [torch.float16]
+
     return _get_batch(
         neox_args=neox_args,
         tokenizer=neox_args.tokenizer,
         keys=keys,
         data=data,
-        datatype=datatype,
+        datatypes=datatypes,
     )
 
 
@@ -193,10 +204,15 @@ def get_batch_pipe(data, neox_args):
     """A modification of get_batch() to work with the latest batch instead of an iterator. """
     # Items and their type.
     keys = ["text"]
-    datatype = torch.int64
+    datatypes = [torch.int64]
+
+    if neox_args.do_distillation and (neox_args.input_teacher_hidden_state or neox_args.input_teacher_output):
+        assert neox_args.fp16['enabled'], f"Expecting the fp16 training enabled but neox_args.fp16['enabled'] = {neox_args.fp16['enabled']}"
+        keys += ["outputs"]
+        datatypes += [torch.float16]
 
     tokens, labels, loss_mask, attention_mask, position_ids = _get_batch(
-        neox_args, neox_args.tokenizer, keys, data, datatype
+        neox_args, neox_args.tokenizer, keys, data, datatypes
     )
     # unpack data
     return (tokens, position_ids, attention_mask), (labels, loss_mask)

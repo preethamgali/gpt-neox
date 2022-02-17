@@ -657,15 +657,15 @@ class MMapModelOutputSavedDataset(torch.utils.data.Dataset):
                                                      mode='r', 
                                                      shape=model_input_shape)
 
-        return (self.model_input_memmap_file[local_idx:local_idx+1], self.model_output_memmap_file[local_idx:local_idx+1])
+        return (self.model_input_memmap_file[local_idx], self.model_output_memmap_file[local_idx])
 
     def __getitem__(self, idx):
 
         file_idx, local_idx = self.idx2file[idx]
         memmap_data =  self.get_memmap_data(file_idx, local_idx)
         data_dict = {
-                        'text': memmap_data[0], 
-                        'outputs': memmap_data[1]
+                        'text': torch.tensor(memmap_data[0]), 
+                        'outputs': torch.tensor(memmap_data[1])
                     }
         return data_dict
 

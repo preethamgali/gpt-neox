@@ -39,7 +39,7 @@ def _build_key_size_numel_dictionaries(keys, data):
     if get_model_parallel_rank() == 0:
         offset = 0
         for key in keys:
-            assert data[key].dim() < max_dim, 'you should increase MAX_DATA_DIM'
+            assert data[key].dim() < max_dim, f'provided dim: {data[key].dim()} of shape {data[key].shape} you should increase MAX_DATA_DIM: {max_dim}'
             size = data[key].size()
             for i, s in enumerate(size):
                 sizes[i + offset] = s
@@ -85,8 +85,7 @@ def broadcast_data(keys, data, datatype):
     """
     # Build (key, size) and (key, number of elements) dictionaries along
     # with the total number of elements on all ranks.
-    key_size, key_numel, total_numel = _build_key_size_numel_dictionaries(keys,
-                                                                          data)
+    key_size, key_numel, total_numel = _build_key_size_numel_dictionaries(keys,data)
 
     # Pack on rank zero.
     if get_model_parallel_rank() == 0:
